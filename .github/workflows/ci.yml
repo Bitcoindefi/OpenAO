@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: api
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aoweb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aoweb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/aoweb
+      TOKEN_AUTH: changeme
+      PORT: "3001"
+      NODE_ENV: production
+      API_TEST_URL: http://127.0.0.1:3001
+      API_TEST_AUTH: changeme
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: api/pnpm-lock.yaml
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        working-directory: .
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+      - name: Build
+        run: pnpm run build
+      - name: Apply schema
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema.sql
+      - name: Start API
+        run: |
+          set -euo pipefail
+          node dist/server.js > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          for i in $(seq 1 60); do
+            if curl -fsS "$API_TEST_URL/health" >/dev/null; then
+              echo "API ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API failed to start"
+          tail -n 200 /tmp/api.log
+          exit 1
+      - name: Test
+        run: pnpm test
+      - name: Stop API
+        if: always()
+        run: kill "$(cat /tmp/api.pid)" 2>/dev/null || true
+
+  server:
+    name: server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: server/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+      - name: Lint
+        run: pnpm run lint
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+      - name: Lint
+        run: pnpm run lint
+
+
+  docker:
+    name: docker
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        context: [api, server, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.context }}
+        run: docker build -t openao-${{ matrix.context }}:ci ./${{ matrix.context }}
