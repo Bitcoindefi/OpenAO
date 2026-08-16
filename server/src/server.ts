@@ -77,6 +77,7 @@ function broadcastCharacterSnapshot(
 
 type WSServer = {
     on: (event: "connection", listener: (client: RuntimeClient, request: RuntimeConnectionRequest) => void) => void;
+    close?: (cb?: (err?: Error) => void) => void;
 };
 
 type ServerCharacter = RuntimeCharacter & {
@@ -949,3 +950,81 @@ createDynamicScheduler(
 );
 
 void saveOnlineStatsSnapshot();
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string) {
+    if (isShuttingDown) {
+        return;
+    }
+    isShuttingDown = true;
+
+    console.log(`[Servidor] Recibida senal ${signal}. Iniciando apagado ordenado...`);
+
+    // 1. Avisar a los clientes conectados antes de cortar
+    try {
+        if (typeof handleProtocol?.consoleToAll === "function") {
+            handleProtocol.consoleToAll("[Servidor] El servidor se está reiniciando / apagando...", "#E69500", 1, 0);
+        }
+    } catch (err) {
+        console.error("[Servidor] Error al notificar a los clientes:", err);
+    }
+
+    // 2. Cerrar sockets de clientes conectados
+    try {
+        for (const idUser in vars.clients) {
+            const client = vars.clients[idUser] as RuntimeClient | undefined;
+            if (client) {
+                try {
+                    client.close?.();
+                } catch {
+                    // ignorar errores al cerrar socket individual
+                }
+            }
+        }
+    } catch (err) {
+        console.error("[Servidor] Error al cerrar conexiones de clientes:", err);
+    }
+
+    // 3. Desmarcar personajes conectados en la base de datos (con timeout de seguridad)
+    const shutdownTimeout = setTimeout(() => {
+        console.warn("[Servidor] Timeout esperando respuesta de la API durante el apagado. Saliendo de forma forzada...");
+        process.exit(1);
+    }, 5000);
+
+    try {
+        const resetResponse = (await funct.fetchUrl("/internal/characters/reset-connected", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: vars.tokenAuth,
+            },
+        })) as { ok?: boolean; updated?: number } | undefined;
+
+        console.log(`[Servidor] Personajes desmarcados exitosamente durante el apagado (${resetResponse?.updated ?? 0} actualizados).`);
+    } catch (err) {
+        console.error("[Servidor] Error al desmarcar personajes en shutdown:", err);
+    } finally {
+        clearTimeout(shutdownTimeout);
+    }
+
+    // 4. Cerrar servidor WebSocket
+    try {
+        if (wsServer && typeof wsServer.close === "function") {
+            wsServer.close();
+        }
+    } catch {
+        // ignorar
+    }
+
+    console.log("[Servidor] Apagado completado.");
+    process.exit(0);
+}
+
+process.on("SIGINT", () => {
+    void gracefulShutdown("SIGINT");
+});
+
+process.on("SIGTERM", () => {
+    void gracefulShutdown("SIGTERM");
+});
