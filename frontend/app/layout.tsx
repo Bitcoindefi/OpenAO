@@ -19,6 +19,15 @@ const geistMono = Geist_Mono({
     subsets: ["latin"],
 });
 
+export const viewport: import("next").Viewport = {
+    width: "device-width",
+    initialScale: 1,
+    maximumScale: 1,
+    userScalable: false,
+    viewportFit: "cover",
+    themeColor: "#020617",
+};
+
 export const metadata: Metadata = {
     ...buildPageMetadata({
         title: siteTitle,
