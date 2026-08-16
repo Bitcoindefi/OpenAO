@@ -485,6 +485,7 @@ export type RuntimeClient = {
     lastPacketIntervalMs?: number;
     minPacketIntervalMs?: number;
     lastActivityAt?: number;
+    lastPingAt?: number;
     packetTypeCounts?: Record<string, number>;
     nextMapClickAt?: number;
     nextDoorToggleAt?: number;
