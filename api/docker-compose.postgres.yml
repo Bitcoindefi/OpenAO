@@ -11,7 +11,11 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # postgres:18+ exige el mount en /var/lib/postgresql, NO en .../data.
+      # Los datos quedan en un subdirectorio por version mayor para que
+      # "pg_upgrade --link" no cruce un limite de punto de montaje.
+      # Con la ruta vieja el contenedor no arranca.
+      - postgres_data:/var/lib/postgresql
       - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       test:
