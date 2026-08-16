@@ -1,0 +1,192 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  api:
+    name: API (typecheck, test, build)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: aoweb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aoweb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: api/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: api
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: api
+        run: pnpm exec tsc --noEmit
+
+      - name: Run migrations / schema
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aoweb
+          TOKEN_AUTH: test-token-secret
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d aoweb -f schema.sql
+
+      - name: Start API for integration tests
+        working-directory: api
+        env:
+          PORT: 3001
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aoweb
+          TOKEN_AUTH: test-token-secret
+          NODE_ENV: test
+          CORS_ORIGIN: "http://localhost:3000"
+        run: |
+          pnpm exec tsx src/server.ts &
+          for i in {1..30}; do
+            if curl -s http://localhost:3001/health | grep -q ok:true; then
+              echo "API is healthy"
+              break
+            fi
+            echo "Waiting for API..."
+            sleep 1
+          done
+
+      - name: Run tests
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aoweb
+          TOKEN_AUTH: test-token-secret
+          API_TEST_URL: http://127.0.0.1:3001
+          API_TEST_AUTH: test-token-secret
+        run: pnpm test
+
+      - name: Build API
+        working-directory: api
+        run: pnpm run build
+
+  server:
+    name: Server (typecheck, lint, build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: server/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: server
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: server
+        run: pnpm run lint
+
+      - name: Typecheck
+        working-directory: server
+        run: pnpm exec tsc --noEmit
+
+      - name: Build
+        working-directory: server
+        run: pnpm run build
+
+  frontend:
+    name: Frontend (typecheck, lint, build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: frontend
+        run: pnpm run lint
+
+      - name: Typecheck
+        working-directory: frontend
+        run: pnpm exec tsc --noEmit
+
+      - name: Build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_AOWEB_TEST_MODE: "true"
+        run: pnpm run build
+
+  docker-build:
+    name: Docker build checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          file: ./api/Dockerfile
+          push: false
+
+      - name: Build Server image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          push: false
+
+      - name: Build Frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: false
