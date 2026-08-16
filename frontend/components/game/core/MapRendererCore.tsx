@@ -10,7 +10,11 @@ import {
     Graphics,
 } from "pixi.js";
 import { GraphicData, MapTile, SpellData } from "../../../types/game";
-import { getTileAt } from "../../../utils/gameLoader";
+import {
+    getTileAt,
+    UPLOADED_GRAPHIC_INDEX_START,
+} from "../../../utils/gameLoader";
+import { getApiBaseUrl } from "../../../lib/api-base-url";
 import {
     createDialogPacket,
     type ChatChannel,
@@ -310,10 +314,15 @@ const isCombatDialogMessage = (text: string, color?: string): boolean => {
     return /^.?fallas.?$/i.test(normalized);
 };
 
-const getGraphicImagePaths = (imageFile: string | number): string[] => [
-    `/graphics/${imageFile}.png`,
-    `/static/graphics/${imageFile}.png`,
-];
+const getGraphicImagePaths = (imageFile: string | number): string[] => {
+    // Los graficos subidos desde el modo construccion no estan horneados en
+    // public/, se sirven desde la API. Se distinguen por el rango de indice.
+    if (Number(imageFile) >= UPLOADED_GRAPHIC_INDEX_START) {
+        return [`${getApiBaseUrl()}/game-data/graphics/${imageFile}.png`];
+    }
+
+    return [`/graphics/${imageFile}.png`, `/static/graphics/${imageFile}.png`];
+};
 
 function shouldHideRemoteCharacterBody(
     character: Character | null | undefined,

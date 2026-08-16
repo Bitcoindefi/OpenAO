@@ -12,6 +12,7 @@ import {
     FXsDB,
     SpellsDB,
 } from "../types/game";
+import { getApiBaseUrl } from "../lib/api-base-url";
 
 type CompactSimpleGraphic = [
     numFile: number,
@@ -494,6 +495,66 @@ function remapMapDataKey(
 }
 
 /**
+ * Suma al catalogo de graficos los PNG subidos desde el modo construccion.
+ *
+ * Los graficos originales viven en graficos_optimized.json, que es un archivo
+ * estatico horneado en el build. Los subidos no pueden estar ahi, asi que se
+ * piden a la API y se agregan al mismo catalogo en memoria: a partir de ese
+ * momento el renderer los resuelve igual que a cualquier otro.
+ *
+ * Cada PNG subido es una imagen completa, no un recorte de un atlas, asi que
+ * numFile es el propio indice y el frame abarca toda la imagen.
+ *
+ * Si falla, el juego arranca igual sin los graficos subidos.
+ */
+async function mergeUploadedGraphics(graphicsDb: GraphicsDB): Promise<void> {
+    try {
+        const response = await fetch(`${getApiBaseUrl()}/game-data/graphics`, {
+            cache: "no-store",
+        });
+
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = (await response.json()) as {
+            graphics?: Array<{
+                grhIndex: number;
+                width: number;
+                height: number;
+            }>;
+        };
+
+        const uploaded = payload.graphics ?? [];
+
+        for (const graphic of uploaded) {
+            const key = String(graphic.grhIndex);
+            graphicsDb[key] = {
+                numFrames: 1,
+                numFile: key,
+                sX: 0,
+                sY: 0,
+                width: graphic.width,
+                height: graphic.height,
+                frames: { "1": key },
+                offset: { x: 0, y: 0 },
+            };
+        }
+
+        if (uploaded.length > 0) {
+            console.log(
+                `[GRAFICOS] ${uploaded.length} graficos subidos agregados al catalogo.`,
+            );
+        }
+    } catch (error) {
+        console.warn(
+            "[GRAFICOS] No se pudieron cargar los graficos subidos:",
+            error,
+        );
+    }
+}
+
+/**
  * Load graphics database from graficos.json
  */
 export async function loadGraphicsDB(): Promise<GraphicsDB> {
@@ -506,7 +567,9 @@ export async function loadGraphicsDB(): Promise<GraphicsDB> {
                 { preferLocal: PREFER_LOCAL_GRAPHICS },
             );
 
-        return decompressGraphicsDb(optimizedGraphicsDb);
+        const graphicsDb = decompressGraphicsDb(optimizedGraphicsDb);
+        await mergeUploadedGraphics(graphicsDb);
+        return graphicsDb;
     } catch (optimizedError) {
         console.warn(
             "Failed to load optimized graphics database, falling back to legacy graficos.json.",
@@ -660,6 +723,7 @@ export async function loadMapData(mapNumber: number): Promise<MapData> {
                 assetMapNumber,
                 mapNumber,
             );
+            await applyMapOverrides(decompressedData, mapNumber);
             mapValueCache.set(mapNumber, decompressedData);
             return decompressedData;
         } catch (error) {
@@ -672,6 +736,101 @@ export async function loadMapData(mapNumber: number): Promise<MapData> {
 
     mapRequestCache.set(mapNumber, requestPromise);
     return requestPromise.then((mapData) => cloneMapData(mapData));
+}
+
+/**
+ * Indice a partir del cual los graficos son subidos por administradores.
+ * Debe coincidir con UPLOADED_GRAPHIC_INDEX_START en la API.
+ * Los graficos originales del juego llegan hasta 320151.
+ */
+export const UPLOADED_GRAPHIC_INDEX_START = 1_000_000;
+
+export function isUploadedGraphic(grhIndex: number): boolean {
+    return grhIndex >= UPLOADED_GRAPHIC_INDEX_START;
+}
+
+type MapTileOverride = {
+    x: number;
+    y: number;
+    layer: number;
+    grhIndex: number | null;
+    blocked: boolean | null;
+};
+
+/**
+ * Aplica sobre el mapa recien cargado los tiles editados desde el modo
+ * construccion.
+ *
+ * El mapa base se sigue sirviendo como archivo estatico y solo se piden las
+ * diferencias, que normalmente son unas pocas. Asi editar un tile no obliga a
+ * regenerar los 20 MB de mapas ni a invalidar el cache del mapa completo.
+ *
+ * Si la peticion falla el mapa se dibuja igual, sin los cambios: es preferible
+ * mostrar el mundo original a no mostrar nada.
+ */
+async function applyMapOverrides(
+    mapData: MapData,
+    mapNumber: number,
+): Promise<void> {
+    try {
+        const response = await fetch(
+            `${getApiBaseUrl()}/maps/${mapNumber}/overrides`,
+            { cache: "no-store" },
+        );
+
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = (await response.json()) as {
+            overrides?: MapTileOverride[];
+        };
+
+        const overrides = payload.overrides ?? [];
+
+        if (overrides.length === 0) {
+            return;
+        }
+
+        const mapEntry = mapData[String(mapNumber)];
+
+        if (!mapEntry) {
+            return;
+        }
+
+        for (const override of overrides) {
+            const row = mapEntry[String(override.y)];
+            const tile = row?.[String(override.x)];
+
+            if (!tile) {
+                continue;
+            }
+
+            if (override.grhIndex != null) {
+                const graphics = (tile.graphics ?? {}) as Record<
+                    string,
+                    number
+                >;
+                graphics[String(override.layer)] = override.grhIndex;
+                tile.graphics = graphics;
+            }
+
+            if (override.blocked != null) {
+                // El cliente representa el bloqueo como numero (1 / 0), no como
+                // booleano, que es lo que devuelve la API.
+                tile.blocked = override.blocked ? 1 : 0;
+            }
+        }
+
+        console.log(
+            `[MAPA] ${overrides.length} tiles editados aplicados al mapa ${mapNumber}.`,
+        );
+    } catch (error) {
+        console.warn(
+            `[MAPA] No se pudieron aplicar los tiles editados del mapa ${mapNumber}:`,
+            error,
+        );
+    }
 }
 
 /**

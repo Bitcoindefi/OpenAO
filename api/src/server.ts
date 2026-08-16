@@ -96,6 +96,20 @@ import {
     upsertGameBalance,
 } from "./repositories/gameBalance";
 import {
+    clearTile,
+    discardDrafts,
+    getGraphicContent,
+    getMapStatus,
+    listGraphics,
+    listMapOverrides,
+    paintTiles,
+    paintTilesSchema,
+    publishMap,
+    revertMap,
+    uploadGraphic,
+} from "./repositories/worldBuilder";
+import { MAX_PNG_BYTES } from "./lib/pngValidation";
+import {
     getGameCraftingRecipeById,
     listGameCraftingRecipeChangesSince,
     deleteGameCraftingRecipe,
@@ -719,6 +733,305 @@ app.put("/admin/game-data/balance", async (request, response) => {
                 authorized.session.account._id,
             ),
         );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Modo construccion: subir graficos y pintar mapas
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Sube un PNG y lo registra como grafico del motor.
+ *
+ * Se recibe el binario crudo en vez de multipart: es un solo archivo, no hay
+ * campos adicionales, y evita sumar una dependencia de parseo de formularios.
+ */
+app.post(
+    "/admin/game-data/graphics",
+    express.raw({ type: "image/png", limit: MAX_PNG_BYTES }),
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            if (!Buffer.isBuffer(request.body)) {
+                response.status(400).json({
+                    error: "Enviar el PNG como cuerpo crudo con Content-Type: image/png.",
+                });
+                return;
+            }
+
+            const result = await uploadGraphic(
+                request.body,
+                authorized.session.account._id,
+            );
+
+            if (!result.ok) {
+                response.status(400).json({ error: result.reason });
+                return;
+            }
+
+            response.status(result.deduped ? 200 : 201).json({
+                grhIndex: result.graphic.grhIndex,
+                width: result.graphic.width,
+                height: result.graphic.height,
+                byteSize: result.graphic.byteSize,
+                deduped: result.deduped,
+                url: `/game-data/graphics/${result.graphic.grhIndex}.png`,
+            });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/**
+ * Catalogo de graficos subidos. Es publico porque todo cliente que entre a un
+ * mapa editado necesita poder resolver estos indices, igual que resuelve los
+ * originales desde graficos.json. Devuelve solo metadatos, no el contenido.
+ */
+app.get("/game-data/graphics", async (_request, response) => {
+    try {
+        response.json({ graphics: await listGraphics(500) });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
+ * Sirve un grafico subido. Es publico a proposito: cualquier jugador que entre
+ * a un mapa editado necesita poder descargarlo, igual que los graficos
+ * originales.
+ *
+ * El contenido de un indice nunca cambia (subir otra imagen genera otro
+ * indice), asi que se puede cachear de forma agresiva.
+ */
+app.get("/game-data/graphics/:grhIndex.png", async (request, response) => {
+    try {
+        const grhIndex = Number.parseInt(request.params.grhIndex ?? "", 10);
+
+        if (!Number.isInteger(grhIndex) || grhIndex < 0) {
+            response.status(400).json({ error: "Indice invalido." });
+            return;
+        }
+
+        const graphic = await getGraphicContent(grhIndex);
+
+        if (!graphic) {
+            response.status(404).json({ error: "Grafico no encontrado." });
+            return;
+        }
+
+        response.setHeader("Content-Type", "image/png");
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        response.setHeader("ETag", `"${graphic.checksum}"`);
+        response.send(graphic.content);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const parsed = paintTilesSchema.safeParse(request.body);
+
+        if (!parsed.success) {
+            response
+                .status(400)
+                .json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+
+        response.json(
+            await paintTiles(
+                mapNum,
+                parsed.data.tiles,
+                authorized.session.account._id,
+            ),
+        );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.delete(
+    "/admin/game-data/maps/:mapNum/tiles/:x/:y/:layer",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const x = Number.parseInt(request.params.x ?? "", 10);
+            const y = Number.parseInt(request.params.y ?? "", 10);
+            const layer = Number.parseInt(request.params.layer ?? "", 10);
+
+            if (![mapNum, x, y, layer].every(Number.isInteger)) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+
+            response.json({ removed: await clearTile(mapNum, x, y, layer) });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/**
+ * Devuelve los tiles modificados de un mapa. El cliente carga el mapa base
+ * desde el archivo estatico y aplica estos cambios encima, asi no hay que
+ * regenerar los 20 MB de mapas cada vez que se pinta un tile.
+ *
+ * Un jugador comun recibe solo lo publicado. Si la peticion trae una sesion de
+ * admin, recibe ademas sus borradores: eso le da vista previa en vivo de como
+ * va a quedar el mapa antes de publicarlo, sin ninguna pantalla especial.
+ */
+app.get("/maps/:mapNum/overrides", async (request, response) => {
+    try {
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        let includeDrafts = false;
+
+        try {
+            const authorized = await getAuthorizedSession(request);
+            includeDrafts = Boolean(
+                authorized && isAuthorizedGameDataAdmin(authorized.session),
+            );
+        } catch {
+            // Sin sesion valida se sirve lo publicado, que es el caso normal.
+        }
+
+        response.json({
+            mapNum,
+            includeDrafts,
+            overrides: await listMapOverrides(mapNum, includeDrafts),
+        });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Publica los borradores de un mapa. A partir de aca los ven los jugadores. */
+app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json(
+            await publishMap(mapNum, authorized.session.account._id),
+        );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Descarta los borradores sin tocar lo ya publicado. */
+app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json(await discardDrafts(mapNum));
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
+ * Revierte el mapa entero a su estado original: borra publicados y borradores.
+ * Es el boton de panico para deshacer una edicion que salio mal.
+ */
+app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json(await revertMap(mapNum));
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Cuantos tiles hay en borrador y cuantos publicados. */
+app.get("/admin/game-data/maps/:mapNum/status", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json(await getMapStatus(mapNum));
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";

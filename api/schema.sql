@@ -558,3 +558,72 @@ CREATE INDEX IF NOT EXISTS idx_game_smelting_recipes_mineral_item_id ON game_sme
 CREATE INDEX IF NOT EXISTS idx_game_balance_updated_at ON game_balance(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_game_data_revisions_kind_id ON game_data_revisions(kind, id DESC);
 CREATE INDEX IF NOT EXISTS idx_challenge_history_finished_at ON challenge_history(finished_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--  Modo construccion: graficos subidos y ediciones de mapa
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Graficos PNG subidos por administradores.
+--
+-- El contenido se guarda en la propia base a proposito: entra en los backups,
+-- sobrevive a recrear contenedores y no depende de montar un volumen. Cuando
+-- haga falta escalar, mover esto a S3/R2 sólo cambia de donde se lee el blob.
+--
+-- Los indices de grafico originales del juego llegan hasta 320151, asi que el
+-- rango de subidos arranca muy por encima para que no puedan colisionar nunca.
+CREATE TABLE IF NOT EXISTS game_uploaded_graphics (
+    grh_index INTEGER PRIMARY KEY CHECK (grh_index >= 1000000),
+    checksum TEXT NOT NULL UNIQUE,
+    width INTEGER NOT NULL CHECK (width > 0),
+    height INTEGER NOT NULL CHECK (height > 0),
+    byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+    content BYTEA NOT NULL,
+    uploaded_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Tiles de mapa modificados respecto del mapa original en disco.
+--
+-- Se guardan solo las diferencias, no el mapa entero: un mapa son 10.000 tiles
+-- y editar unos pocos no justifica copiar todo. El cliente carga el mapa base y
+-- aplica estos overrides encima.
+--
+-- layer 1 y 2 son el piso, 3 y 4 lo que va por encima del personaje.
+CREATE TABLE IF NOT EXISTS game_map_tile_overrides (
+    map_num INTEGER NOT NULL CHECK (map_num > 0),
+    x INTEGER NOT NULL CHECK (x > 0),
+    y INTEGER NOT NULL CHECK (y > 0),
+    layer SMALLINT NOT NULL CHECK (layer BETWEEN 1 AND 4),
+    grh_index INTEGER,
+    blocked BOOLEAN,
+    updated_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+    PRIMARY KEY (map_num, x, y, layer, status)
+);
+
+-- Migracion para instalaciones que ya tenian la tabla sin estado.
+ALTER TABLE game_map_tile_overrides
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+
+DO $migracion$
+BEGIN
+    -- Lo que existia antes de tener estados ya se veia en el juego, asi que
+    -- cuenta como publicado. Marcarlo como borrador lo haria desaparecer.
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'game_map_tile_overrides_pkey'
+          AND pg_get_constraintdef(oid) NOT LIKE '%status%'
+    ) THEN
+        UPDATE game_map_tile_overrides SET status = 'published';
+        ALTER TABLE game_map_tile_overrides DROP CONSTRAINT game_map_tile_overrides_pkey;
+        ALTER TABLE game_map_tile_overrides
+            ADD PRIMARY KEY (map_num, x, y, layer, status);
+    END IF;
+END
+$migracion$;
+
+CREATE INDEX IF NOT EXISTS idx_game_map_tile_overrides_map
+    ON game_map_tile_overrides(map_num, status);
+CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
+    ON game_uploaded_graphics(created_at DESC);
