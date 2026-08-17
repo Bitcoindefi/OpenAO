@@ -885,7 +885,12 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     );
                 }
 
-                window.setTimeout(() => {
+                const scheduleIdleTask =
+                    typeof window !== "undefined" && "requestIdleCallback" in window
+                        ? (cb: () => void) => (window as any).requestIdleCallback(cb, { timeout: 1000 })
+                        : (cb: () => void) => window.setTimeout(cb, 16);
+
+                scheduleIdleTask(() => {
                     if (!engine.isDestroyed) {
                         const pendingSnapshot =
                             options.pendingUserSnapshotRef.current?.map ===
@@ -944,7 +949,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                                 }
                             });
                     }
-                }, 0);
+                });
             } catch (err) {
                 if (isDisposed) {
                     return;
