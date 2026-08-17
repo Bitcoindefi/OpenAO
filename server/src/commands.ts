@@ -17,7 +17,14 @@ import type {
     RuntimeNpc,
 } from "./types/runtime";
 
-import { reloadBalanceDiff, reloadCraftingRecipesDiff, reloadNpcsDiff, reloadObjectsDiff } from "./gameDataSync";
+import {
+    reloadBalanceDiff,
+    reloadCraftingRecipesDiff,
+    reloadMapDiff,
+    reloadMapsDiff,
+    reloadNpcsDiff,
+    reloadObjectsDiff,
+} from "./gameDataSync";
 import {
     appendMapNpcPlacement,
     loadAllMapNpcPlacements,
@@ -3780,6 +3787,44 @@ const command: CommandApi = {
                     const result = await reloadCraftingRecipesDiff();
                     handleProtocol.console(
                         `[INFO] Crafting recargado. Version ${result.previousVersion} -> ${result.currentVersion}. Recetas actualizadas: ${result.updatedRecipes}.`,
+                        "#E69500",
+                        0,
+                        0,
+                        ws as CommandClient,
+                    );
+                    break;
+                }
+
+                case "/recargarmapa": {
+                    if (!hasAdminPrivileges(user)) {
+                        break;
+                    }
+
+                    const mapNum = Number.parseInt(nextText.trim(), 10);
+                    if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                        handleProtocol.console("Uso: /recargarmapa [numero_mapa]", "#FF0000", 0, 0, ws as CommandClient);
+                        break;
+                    }
+
+                    const result = await reloadMapDiff(mapNum);
+                    handleProtocol.console(
+                        `[INFO] Mapa ${result.mapNum} recargado en caliente desde DB. Overrides aplicados: ${result.appliedOverrides}.`,
+                        "#E69500",
+                        0,
+                        0,
+                        ws as CommandClient,
+                    );
+                    break;
+                }
+
+                case "/recargarmapas": {
+                    if (!hasAdminPrivileges(user)) {
+                        break;
+                    }
+
+                    const result = await reloadMapsDiff();
+                    handleProtocol.console(
+                        `[INFO] Mapas recargados en caliente desde DB. Mapas modificados: ${result.updatedMaps}. Overrides aplicados: ${result.appliedOverrides}.`,
                         "#E69500",
                         0,
                         0,

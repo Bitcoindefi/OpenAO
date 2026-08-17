@@ -403,6 +403,46 @@ export async function getMapStatus(mapNum: number): Promise<{
     };
 }
 
+export async function listAllPublishedMapOverrides(): Promise<
+    Array<{ mapNum: number; overrides: MapTileOverride[] }>
+> {
+    const result = await pool.query<{
+        map_num: number;
+        x: number;
+        y: number;
+        layer: number;
+        grh_index: number | null;
+        blocked: boolean | null;
+    }>(
+        `SELECT map_num, x, y, layer, grh_index, blocked
+         FROM game_map_tile_overrides
+         WHERE status = 'published'
+         ORDER BY map_num, y, x, layer`,
+    );
+
+    const mapsMap = new Map<number, MapTileOverride[]>();
+
+    for (const row of result.rows) {
+        const mapNum = row.map_num;
+        if (!mapsMap.has(mapNum)) {
+            mapsMap.set(mapNum, []);
+        }
+        mapsMap.get(mapNum)!.push({
+            x: row.x,
+            y: row.y,
+            layer: row.layer,
+            grhIndex: row.grh_index,
+            blocked: row.blocked,
+            status: "published",
+        });
+    }
+
+    return Array.from(mapsMap.entries()).map(([mapNum, overrides]) => ({
+        mapNum,
+        overrides,
+    }));
+}
+
 export async function clearTile(
     mapNum: number,
     x: number,
@@ -417,3 +457,4 @@ export async function clearTile(
 
     return (result.rowCount ?? 0) > 0;
 }
+

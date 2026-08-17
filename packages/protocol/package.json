@@ -1,0 +1,17 @@
+{
+  "name": "@openao/protocol",
+  "version": "1.0.0",
+  "description": "Shared binary protocol definitions and opcodes for OpenAO",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "@types/node": "^25.8.0"
+  },
+  "license": "ISC"
+}
