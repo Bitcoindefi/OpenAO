@@ -180,6 +180,8 @@ Las issues abiertas están en [github.com/Bitcoindefi/OpenAO/issues](https://git
 
 El proyecto grande en curso es el **modo construcción** ([#2](https://github.com/Bitcoindefi/OpenAO/issues/2)): editar el mundo del juego desde el navegador y publicar los cambios en vivo. Está dividido en etapas, y las que empiezan por `etapa-0-base` son las que desbloquean el resto.
 
+La implementación del navegador de objetos de [#29](https://github.com/Bitcoindefi/OpenAO/issues/29) es original: no se copió código de `AO-object-editor`, que no publica una licencia compatible. La colocación de objetos usa el estado temporal existente del servidor; su persistencia después de reiniciar sigue dependiendo de [#9](https://github.com/Bitcoindefi/OpenAO/issues/9).
+
 Si querés arrancar por algo chico, mirá las etiquetadas [`good first issue`](https://github.com/Bitcoindefi/OpenAO/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
 
 ## Capturas

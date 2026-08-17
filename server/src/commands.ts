@@ -25,6 +25,8 @@ import {
     replaceAllMapNpcPlacements,
 } from "./mapNpcStorage";
 import * as safeZone from "./safeZone";
+import { getClientById } from "./runtimeRegistry";
+import { parseAdminNpcPlacementArgs, parseAdminObjectPlacementArgs } from "./adminPlacement";
 
 export {};
 
@@ -1488,6 +1490,30 @@ function normalizeEquippedItemsForCurrentClass(user: CommandCharacter) {
     return changed;
 }
 
+function placeTemporaryMapObject(idMap: number, pos: { x: number; y: number }, idItem: number, amount: number): boolean {
+    const tile = vars.mapa[idMap]?.[pos.y]?.[pos.x];
+
+    if (!tile) {
+        return false;
+    }
+
+    tile.objInfo = {
+        objIndex: idItem,
+        amount,
+    };
+
+    game.loopAreaPos(idMap, pos, function (target: RuntimeCharacter) {
+        const targetClient = getClientById(target.id);
+        if (!targetClient) {
+            return;
+        }
+
+        handleProtocol.renderItem(idItem, idMap, pos, targetClient);
+    });
+
+    return true;
+}
+
 async function changeCharacterClassByAdmin(target: CommandCharacter, classInput: string, ws: RuntimeClient) {
     const classId = resolveClassIdInput(classInput);
 
@@ -1683,6 +1709,7 @@ function spawnNpcNextToAdmin(
     ws: RuntimeClient,
     persist = false,
     persistMovement = false,
+    requestedPos?: { x: number; y: number },
 ) {
     const user = getCharacter(idUser);
     const datNpc = vars.datNpc[idNpc];
@@ -1692,11 +1719,18 @@ function spawnNpcNextToAdmin(
         return;
     }
 
-    const spawnPos = getLeftNpcSpawnPosition(user, Boolean(datNpc.aguaValida), Boolean(datNpc.tierraInvalida));
+    const isPersisted = persist;
+    const spawnPos = requestedPos
+        ? game.validPosRespawnNpc(requestedPos, user.map, isPersisted ? false : Boolean(datNpc.aguaValida), Boolean(datNpc.tierraInvalida))
+            ? requestedPos
+            : null
+        : getLeftNpcSpawnPosition(user, Boolean(datNpc.aguaValida), Boolean(datNpc.tierraInvalida));
 
     if (!spawnPos) {
         handleProtocol.console(
-            "[INFO] La casilla a tu izquierda no es valida o no esta libre para invocar ese NPC.",
+            requestedPos
+                ? "La posición indicada no es válida o no está libre para invocar ese NPC."
+                : "La casilla a tu izquierda no es válida o no está libre para invocar ese NPC.",
             "#E69500",
             0,
             0,
@@ -1712,7 +1746,7 @@ function spawnNpcNextToAdmin(
         )
     ) {
         handleProtocol.console(
-            "[INFO] Ya existe un NPC persistente guardado en esa posicion del mapa.",
+            "[INFO] Ya existe un NPC persistente guardado en esa posición del mapa.",
             "#E69500",
             0,
             0,
@@ -3503,11 +3537,11 @@ const command: CommandApi = {
 
                 case "/invocarnpc":
                     if (hasAdminPrivileges(user)) {
-                        const spawnArgs = nextText.trim().split(/\s+/).filter(Boolean);
+                        const placement = parseAdminNpcPlacementArgs(nextText);
 
-                        if (spawnArgs.length === 0) {
+                        if (!placement) {
                             handleProtocol.console(
-                                "[INFO] Uso: /invocarnpc ID_NPC [guardar|fijo|persistente] [mover|movil]",
+                                "[INFO] Uso: /invocarnpc ID_NPC [guardar|fijo|persistente] [mover|movil] [X Y]",
                                 "#E69500",
                                 0,
                                 0,
@@ -3516,11 +3550,33 @@ const command: CommandApi = {
                             break;
                         }
 
-                        const idNpc = Number.parseInt(spawnArgs[0], 10);
+                        spawnNpcNextToAdmin(
+                            clientId,
+                            placement.idNpc,
+                            ws,
+                            placement.persist,
+                            placement.persistMovement,
+                            placement.position ?? undefined,
+                        );
+                    }
+                    break;
 
-                        if (!Number.isInteger(idNpc) || idNpc <= 0) {
+                case "/colocarobjeto":
+                    if (hasAdminPrivileges(user)) {
+                        const placement = parseAdminObjectPlacementArgs(nextText);
+                        if (!placement) {
+                            handleProtocol.console("[INFO] Uso: /colocarobjeto ID_OBJETO X Y", "#E69500", 0, 0, ws as CommandClient);
+                            break;
+                        }
+                        const itemData = vars.datObj[placement.objIndex];
+                        const tile = vars.mapa[user.map]?.[placement.position.y]?.[placement.position.x];
+                        if (!itemData) {
+                        handleProtocol.console("No existe un objeto con ID " + placement.objIndex + ".", "#E69500", 0, 0, ws as CommandClient);
+                            break;
+                        }
+                        if (!tile || tile.objInfo) {
                             handleProtocol.console(
-                                "[INFO] Uso: /invocarnpc ID_NPC [guardar|fijo|persistente] [mover|movil]",
+                                "La posición indicada no es válida o ya contiene un objeto.",
                                 "#E69500",
                                 0,
                                 0,
@@ -3528,15 +3584,14 @@ const command: CommandApi = {
                             );
                             break;
                         }
-
-                        const persist = ["guardar", "guardado", "fijo", "persistente"].includes(
-                            String(spawnArgs[1] ?? "").toLocaleLowerCase("es-AR"),
+                        placeTemporaryMapObject(user.map, placement.position, placement.objIndex, 1);
+                        handleProtocol.console(
+                            `Colocaste ${itemData.name ?? `objeto ${placement.objIndex}`} en ${user.map}@${placement.position.x}@${placement.position.y}. El objeto se renderiza con el estado temporal existente del servidor; su persistencia después de reiniciar sigue dependiendo de #9.`,
+                            "#86efac",
+                            0,
+                            0,
+                            ws as CommandClient,
                         );
-                        const persistMovement = ["mover", "movil", "móvil"].includes(
-                            String(spawnArgs[2] ?? "").toLocaleLowerCase("es-AR"),
-                        );
-
-                        spawnNpcNextToAdmin(clientId, idNpc, ws, persist, persistMovement);
                     }
                     break;
 

@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/immutability */
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import {
     Application,
     Container,
@@ -141,9 +141,16 @@ type UseRendererBootstrapOptions = {
     updateEntityFXPositions: (engine: any) => void;
     debugCombatOverlayTextRef: RefObject<string>;
     setInspectedNpc: (value: any) => void;
+    onEditorTileClick?: (tile: { x: number; y: number }) => boolean;
 };
 
 export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
+    const onEditorTileClickRef = useRef(options.onEditorTileClick);
+
+    useEffect(() => {
+        onEditorTileClickRef.current = options.onEditorTileClick;
+    }, [options.onEditorTileClick]);
+
     useEffect(() => {
         if (!options.isMounted || !options.canvasRef.current) return;
 
@@ -461,6 +468,16 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                         button: Number(event.button ?? 0),
                         trusted: event.isTrusted !== false,
                     };
+
+                    if (
+                        event.button !== 2 &&
+                        onEditorTileClickRef.current?.({
+                            x: interaction.targetTileX,
+                            y: interaction.targetTileY,
+                        })
+                    ) {
+                        return;
+                    }
 
                     const isRightClick = event.button === 2;
 
