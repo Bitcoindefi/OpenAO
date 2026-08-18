@@ -131,6 +131,12 @@ import {
     createUserOnlineStat,
     listUserOnlineStats,
 } from "./repositories/userOnlineStats";
+import {
+    ensureMapsSeeded,
+    listGameMaps,
+    getGameMapById,
+    listGameMapChangesSince,
+} from "./repositories/gameMaps";
 import { createChallengeHistory } from "./repositories/challenges";
 
 const app = express();
@@ -251,6 +257,7 @@ async function start(): Promise<void> {
         await pool.query("SELECT 1");
         console.log("PostgreSQL connected successfully");
         await ensurePgStatStatements();
+        await ensureMapsSeeded();
 
         app.listen(config.port, () => {
             console.log(`API listening on port ${config.port}`);
@@ -2884,6 +2891,47 @@ app.get("/user-online-stats", async (request, response) => {
                 : 24;
         const result = await listUserOnlineStats(hoursParam);
         response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+
+app.get("/internal/game-maps", async (request, response) => {
+    try {
+        const search = typeof request.query.search === "string" ? request.query.search : undefined;
+        const limit = typeof request.query.limit === "string" ? Number(request.query.limit) : undefined;
+        const page = typeof request.query.page === "string" ? Number(request.query.page) : undefined;
+        response.json(await listGameMaps({ search, limit, page }));
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/game-maps/:id", async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const result = await getGameMapById(id);
+        if (!result) {
+            response.status(404).json({ error: "Map not found" });
+            return;
+        }
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/game-maps/changes/since/:version", async (request, response) => {
+    try {
+        const sinceVersion = Number(request.params.version);
+        response.json(await listGameMapChangesSince(sinceVersion));
     } catch (error) {
         response.status(500).json({
             error: error instanceof Error ? error.message : "Unexpected error",
