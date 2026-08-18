@@ -246,6 +246,33 @@ async function ensurePgStatStatements(): Promise<void> {
     }
 }
 
+
+
+// ---------------------------------------------------------------
+// Startup configuration validation
+// ---------------------------------------------------------------
+function validateStartupConfig(): string[] {
+  \n  // Validate config at startup\n  const configWarnings = validateStartupConfig();\n  for (const w of configWarnings) {\n    console.warn(w);\n  }\nconst warnings: string[] = [];
+
+  if (!config.sesRegion || !config.sesAccessKeyId || !config.sesSecretAccessKey || !config.sesFromEmail) {
+    warnings.push(
+      "⚠️  Amazon SES no está configurado. La recuperación de contraseña NO funcionará. " +
+      "Copia .env.example a .env y completa las variables SES_REGION, SES_ACCESS_KEY_ID, " +
+      "SES_SECRET_ACCESS_KEY y SES_FROM_EMAIL."
+    );
+  }
+
+  if (!process.env.SITE_URL?.trim()) {
+    warnings.push(
+      "⚠️  SITE_URL no está definida. Los enlaces de recuperación de contraseña usarán " +
+      "el valor por defecto "https://aoweb.app", que probablemente no coincide con tu despliegue. " +
+      "Define SITE_URL en .env con la URL real de tu instancia."
+    );
+  }
+
+  return warnings;
+}
+
 async function start(): Promise<void> {
     try {
         await pool.query("SELECT 1");
