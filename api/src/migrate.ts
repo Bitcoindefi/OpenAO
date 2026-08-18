@@ -51,6 +51,27 @@ async function migrate(): Promise<void> {
       ALTER TABLE game_data_revisions DROP CONSTRAINT IF EXISTS game_data_revisions_kind_check;
       ALTER TABLE game_data_revisions
         ADD CONSTRAINT game_data_revisions_kind_check CHECK (kind IN ('objs', 'npcs', 'crafting_recipes', 'smelting_recipes', 'balance', 'maps'));
+
+
+      CREATE TABLE IF NOT EXISTS game_map_permissions (
+          map_id INTEGER NOT NULL REFERENCES game_maps(id) ON DELETE CASCADE,
+          account_id TEXT NOT NULL,
+          can_edit BOOLEAN NOT NULL DEFAULT false,
+          is_protected BOOLEAN NOT NULL DEFAULT false,
+          granted_by TEXT NOT NULL,
+          granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (map_id, account_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS map_edit_log (
+          id SERIAL PRIMARY KEY,
+          map_id INTEGER NOT NULL REFERENCES game_maps(id) ON DELETE CASCADE,
+          account_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          details JSONB,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
     `);
 
     console.log("Database schema applied successfully");
