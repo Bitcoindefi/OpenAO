@@ -33,4 +33,4 @@ COPY --from=build /app/mapas_source ./mapas_source
 
 EXPOSE 7666
 
-CMD ["pnpm", "start"]
+CMD ["node", "dist/server.js"]
