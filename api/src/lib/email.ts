@@ -11,7 +11,17 @@ let sesClient: SESv2Client | null = null;
 
 function getSesClient(): SESv2Client {
   if (!config.sesRegion || !config.sesAccessKeyId || !config.sesSecretAccessKey || !config.sesFromEmail) {
-    throw new Error("Amazon SES no esta configurado");
+    const missingVars = [];
+if (!config.sesRegion) missingVars.push("SES_REGION");
+if (!config.sesAccessKeyId) missingVars.push("SES_ACCESS_KEY_ID");
+if (!config.sesSecretAccessKey) missingVars.push("SES_SECRET_ACCESS_KEY");
+if (!config.sesFromEmail) missingVars.push("SES_FROM_EMAIL");
+
+const errorMsg = missingVars.length > 0
+  ? "Amazon SES no esta configurado. Faltan variables de entorno: " + missingVars.join(", ") + ". Copia .env.example a .env y completa los valores de SES."
+  : "Amazon SES no esta configurado. Copia .env.example a .env y completa los valores de SES.";
+
+throw new Error(errorMsg);
   }
 
   if (!sesClient) {
