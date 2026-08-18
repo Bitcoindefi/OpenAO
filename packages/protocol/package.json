@@ -1,0 +1,16 @@
+{
+    "name": "@openao/protocol",
+    "version": "1.0.0",
+    "description": "Shared protocol definitions for OpenAO client and server",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "typescript": "^6.0.3",
+        "vitest": "^3.2.1"
+    },
+    "license": "ISC"
+}

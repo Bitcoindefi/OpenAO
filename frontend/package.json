@@ -10,6 +10,7 @@
         "generate:headswithfile": "node ./scripts/generate-headswithfile.mjs"
     },
     "dependencies": {
+        "@openao/protocol": "file:../packages/protocol",
         "dotenv": "^17.4.2",
         "howler": "^2.2.4",
         "lucide-react": "^1.16.0",
