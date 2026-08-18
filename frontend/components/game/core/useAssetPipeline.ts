@@ -482,6 +482,12 @@ export function useAssetPipeline({
                 return;
             }
 
+            // Skip prefetching if user has Save-Data or data saver enabled
+            const nav = typeof navigator !== "undefined" ? (navigator as any) : null;
+            if (nav?.connection?.saveData === true) {
+                return;
+            }
+
             const nearbyMaps = collectAdjacentMapNumbers(
                 engine.mapData,
                 engine.mapNumber,
@@ -490,18 +496,22 @@ export function useAssetPipeline({
                 return;
             }
 
+            // Limit prefetch to a maximum of 2 concurrent adjacent maps to conserve RAM & network
+            const MAX_CONCURRENT_PREFETCH = 2;
+            const targetMaps = nearbyMaps.slice(0, MAX_CONCURRENT_PREFETCH);
+
             updateLoadingProgress(
                 "Precargando alrededores",
                 88,
-                `Analizando ${nearbyMaps.length} mapas cercanos...`,
+                `Analizando ${targetMaps.length} mapas cercanos...`,
             );
 
-            for (let index = 0; index < nearbyMaps.length; index++) {
+            for (let index = 0; index < targetMaps.length; index++) {
                 if (engine.isDestroyed) {
                     return;
                 }
 
-                const targetMap = nearbyMaps[index];
+                const targetMap = targetMaps[index];
                 try {
                     const nextMapData = await loadMapData(targetMap);
                     const nextMapDimensions = getMapDimensions(
@@ -523,7 +533,7 @@ export function useAssetPipeline({
                     );
                     updateLoadingProgress(
                         "Precargando alrededores",
-                        88 + Math.round(((index + 1) / nearbyMaps.length) * 12),
+                        88 + Math.round(((index + 1) / targetMaps.length) * 12),
                         `Mapa ${targetMap} listo para transicion rapida.`,
                     );
                 } catch (error) {
