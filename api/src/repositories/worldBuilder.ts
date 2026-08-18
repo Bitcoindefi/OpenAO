@@ -46,7 +46,10 @@ export async function uploadGraphic(
         return { ok: false, reason: validation.reason };
     }
 
-    const checksum = computeChecksum(buffer);
+    // El checksum y el blob se calculan sobre la salida re-encodeada, no sobre
+    // bytes controlados por el usuario. Asi metadatos o datos anexados no crean
+    // assets distintos y nunca llegan al almacenamiento.
+    const checksum = computeChecksum(validation.content);
 
     const existing = await pool.query<{
         grh_index: number;
@@ -112,7 +115,7 @@ export async function uploadGraphic(
                 validation.width,
                 validation.height,
                 validation.byteSize,
-                buffer,
+                validation.content,
                 accountId,
             ],
         );
