@@ -131,7 +131,23 @@ import {
     createUserOnlineStat,
     listUserOnlineStats,
 } from "./repositories/userOnlineStats";
+import {
+    ensureMapsSeeded,
+    listGameMaps,
+    getGameMapById,
+    listGameMapChangesSince,
+} from "./repositories/gameMaps";
 import { createChallengeHistory } from "./repositories/challenges";
+import {
+    checkMapPermission,
+    checkMapProtected,
+    grantMapPermission,
+    revokeMapPermission,
+    setMapProtected,
+    logMapEdit,
+    listMapEditLog,
+    listMapPermissions,
+} from "./repositories/mapPermissions";
 
 const app = express();
 const SLOW_REQUEST_LOG_THRESHOLD_MS = 2000;
@@ -148,6 +164,42 @@ function isAuthorizedGameDataAdmin(session: {
     }
 
     return session.account.email.toLowerCase() === config.gameDataAdminEmail;
+}
+
+function requireMapPermission(requireEdit: boolean = true) {
+    return async (request: express.Request, response: express.Response, next: express.NextFunction) => {
+        try {
+            const mapId = Number(request.params.id);
+            if (isNaN(mapId)) {
+                response.status(400).json({ error: "Invalid map ID" });
+                return;
+            }
+            const session = await getAuthorizedSession(request);
+            if (!session) {
+                response.status(401).json({ error: "Unauthorized" });
+                return;
+            }
+            // Game data admins bypass permission checks
+            if (isAuthorizedGameDataAdmin(session)) {
+                next();
+                return;
+            }
+            const perm = await checkMapPermission(mapId, session.account._id);
+            if (!perm.canEdit && requireEdit) {
+                response.status(403).json({ error: "No edit permission for this map" });
+                return;
+            }
+            if (requireEdit && perm.isProtected) {
+                response.status(403).json({ error: "Map is protected from edits" });
+                return;
+            }
+            next();
+        } catch (error) {
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Unexpected error",
+            });
+        }
+    };
 }
 
 function isCharacterSaveRoute(method: string, path: string): boolean {
@@ -251,6 +303,7 @@ async function start(): Promise<void> {
         await pool.query("SELECT 1");
         console.log("PostgreSQL connected successfully");
         await ensurePgStatStatements();
+        await ensureMapsSeeded();
 
         app.listen(config.port, () => {
             console.log(`API listening on port ${config.port}`);
@@ -2891,4 +2944,184 @@ app.get("/user-online-stats", async (request, response) => {
     }
 });
 
+
+app.get("/internal/game-maps", async (request, response) => {
+    try {
+        const search = typeof request.query.search === "string" ? request.query.search : undefined;
+        const limit = typeof request.query.limit === "string" ? Number(request.query.limit) : undefined;
+        const page = typeof request.query.page === "string" ? Number(request.query.page) : undefined;
+        response.json(await listGameMaps({ search, limit, page }));
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/game-maps/:id", async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const result = await getGameMapById(id);
+        if (!result) {
+            response.status(404).json({ error: "Map not found" });
+            return;
+        }
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/game-maps/changes/since/:version", async (request, response) => {
+    try {
+        const sinceVersion = Number(request.params.version);
+        response.json(await listGameMapChangesSince(sinceVersion));
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+
+// --- Map Permission Routes ---
+
+app.get("/internal/game-maps/:id/permission", requireMapPermission(false), async (request, response) => {
+    try {
+        const mapId = Number(request.params.id);
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        const result = await checkMapPermission(mapId, session.account._id);
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.post("/internal/game-maps/:id/grant", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.id);
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        if (!isAuthorizedGameDataAdmin(session)) {
+            response.status(403).json({ error: "Only game data admins can grant permissions" });
+            return;
+        }
+        const { accountId } = request.body;
+        if (!accountId || typeof accountId !== "string") {
+            response.status(400).json({ error: "accountId is required" });
+            return;
+        }
+        await grantMapPermission(mapId, accountId, session.account._id);
+        await logMapEdit(mapId, session.account._id, "grant_permission", { targetAccountId: accountId });
+        response.status(201).json({ success: true });
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.post("/internal/game-maps/:id/revoke", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.id);
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        if (!isAuthorizedGameDataAdmin(session)) {
+            response.status(403).json({ error: "Only game data admins can revoke permissions" });
+            return;
+        }
+        const { accountId } = request.body;
+        if (!accountId || typeof accountId !== "string") {
+            response.status(400).json({ error: "accountId is required" });
+            return;
+        }
+        await revokeMapPermission(mapId, accountId);
+        await logMapEdit(mapId, session.account._id, "revoke_permission", { targetAccountId: accountId });
+        response.json({ success: true });
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.post("/internal/game-maps/:id/protect", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.id);
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        if (!isAuthorizedGameDataAdmin(session)) {
+            response.status(403).json({ error: "Only game data admins can change protection" });
+            return;
+        }
+        const isProtected = request.body.isProtected === true;
+        await setMapProtected(mapId, isProtected, session.account._id);
+        await logMapEdit(mapId, session.account._id, isProtected ? "protect_map" : "unprotect_map", {});
+        response.json({ success: true, isProtected });
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/game-maps/:id/edit-log", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.id);
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        if (!isAuthorizedGameDataAdmin(session)) {
+            response.status(403).json({ error: "Only game data admins can view edit logs" });
+            return;
+        }
+        const limit = typeof request.query.limit === "string" ? Number(request.query.limit) : 50;
+        const logs = await listMapEditLog(mapId, limit);
+        response.json(logs);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/game-maps/:id/permissions", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.id);
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        if (!isAuthorizedGameDataAdmin(session)) {
+            response.status(403).json({ error: "Only game data admins can list permissions" });
+            return;
+        }
+        const perms = await listMapPermissions(mapId);
+        response.json(perms);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
 void start();
