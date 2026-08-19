@@ -288,4 +288,113 @@ class LoadMaps {
     }
 }
 
+    /** Recarga un mapa individual desde disco y actualiza el runtime. */
+    async reloadMapByNumber(mapNum: number): Promise<{ ok: boolean; playersAffected: number }> {
+        if (!this.mapFilesExist(mapNum)) {
+            console.log("[MAP RELOAD] Map " + mapNum + " does not exist, skipping.");
+            return { ok: false, playersAffected: 0 };
+        }
+
+        // Read the map files fresh
+        const mapDir = this.getMapDirectory(mapNum);
+        const metadata = readJsonFile(path.join(mapDir, "meta.json")) as MapMetadata;
+        const terrain = readJsonFile(path.join(mapDir, "terrain.json")) as TerrainMap;
+        const specialsPath = path.join(mapDir, "specials.json");
+        const specials = fs.existsSync(specialsPath)
+            ? (readJsonFile(specialsPath) as SpecialsMap)
+            : ({ exits: {}, objects: {}, npcs: {}, triggers: {} } as SpecialsMap);
+
+        // Clear existing runtime state for this map
+        vars.mapa[mapNum] = [];
+        vars.mapData[mapNum] = {};
+
+        // Re-apply terrain, metadata, specials using the same logic as readMap
+        const palette = terrain.palette ?? {};
+        const rows = Array.isArray(terrain.rows) ? terrain.rows : [];
+        const width = Math.max(1, toNumber(terrain.width, 100));
+        const height = Math.max(1, toNumber(terrain.height, 100));
+
+        for (let y = 1; y <= height; y++) {
+            vars.mapa[mapNum][y] = {};
+            for (let x = 1; x <= width; x++) {
+                const rawTile = rows[y - 1]?.[x - 1];
+                const tileIndex = toNumber(rawTile, 1);
+                const tile: Record<string, unknown> = { tileIndex };
+
+                const paletteEntry = palette[String(tileIndex)];
+                if (paletteEntry) {
+                    tile.blocked = paletteEntry.blocked === true;
+                    tile.graphics = normalizeGraphics(paletteEntry.graphics);
+                }
+
+                vars.mapa[mapNum][y][x] = tile;
+            }
+        }
+
+        // Apply exits
+        for (const [coordinateKey, exit] of Object.entries(specials.exits ?? {})) {
+            const coordinates = parseCoordinateKey(coordinateKey);
+            if (!coordinates) continue;
+            const destinations = normalizeTileExitDestinations(exit);
+            const tile = ensureRuntimeTile(mapNum, coordinates.x, coordinates.y);
+            tile.tileExit = destinations.length === 1 ? destinations[0] : { destinations };
+        }
+
+        // Apply objects, npcs, triggers
+        for (const [ck, objInfo] of Object.entries(specials.objects ?? {})) {
+            const coords = parseCoordinateKey(ck);
+            if (!coords) continue;
+            const tile = ensureRuntimeTile(mapNum, coords.x, coords.y);
+            tile.objInfo = { objIndex: toNumber(objInfo.objIndex), amount: toNumber(objInfo.amount) };
+        }
+        for (const [ck, npcIdx] of Object.entries(specials.npcs ?? {})) {
+            const coords = parseCoordinateKey(ck);
+            if (!coords) continue;
+            const tile = ensureRuntimeTile(mapNum, coords.x, coords.y);
+            tile.npcIndex = toNumber(npcIdx);
+        }
+        for (const [ck, trigger] of Object.entries(specials.triggers ?? {})) {
+            const coords = parseCoordinateKey(ck);
+            if (!coords) continue;
+            const tile = ensureRuntimeTile(mapNum, coords.x, coords.y);
+            tile.trigger = toNumber(trigger);
+        }
+
+        // Apply metadata
+        vars.mapData[mapNum].name = metadata.name || "";
+        vars.mapData[mapNum].musicNum = toNumber(metadata.musicNum);
+        vars.mapData[mapNum].terreno = metadata.terreno || "";
+        vars.mapData[mapNum].zona = metadata.zona || "";
+        vars.mapData[mapNum].pk = toNumber(metadata.pk);
+
+        // Handle player safety: move players off blocked tiles
+        const socket = require("./socket");
+        const playersOnMap = Object.values(vars.personajes).filter(function(p) {
+            return p.map === mapNum && p.connection;
+        });
+
+        let movedPlayers = 0;
+        for (const player of playersOnMap) {
+            const tile = vars.mapa[mapNum]?.[player.pos.y]?.[player.pos.x];
+            if (!tile || tile.blocked) {
+                const FallbackMap = 1, FallbackX = 50, FallbackY = 50;
+                player.map = FallbackMap;
+                player.pos = { x: FallbackX, y: FallbackY };
+                player.posX = FallbackX;
+                player.posY = FallbackY;
+                movedPlayers++;
+            }
+        }
+
+        // Broadcast map reload to clients on this map
+        for (const player of playersOnMap) {
+            if (player.connection && player.connection.emit) {
+                player.connection.emit("mapReloaded", { mapNum: mapNum });
+            }
+        }
+
+        console.log("[MAP RELOAD] Map " + mapNum + " reloaded, " + movedPlayers + " players repositioned.");
+        return { ok: true, playersAffected: movedPlayers };
+    },
+
 module.exports = LoadMaps;
