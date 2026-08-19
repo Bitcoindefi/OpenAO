@@ -132,6 +132,16 @@ import {
     listUserOnlineStats,
 } from "./repositories/userOnlineStats";
 import { createChallengeHistory } from "./repositories/challenges";
+import {
+    createExit,
+    createRoundTripExit,
+    deleteExit,
+    getMapExits,
+    getIncomingExits,
+    updateExit,
+    listOrphanMaps,
+    hasExitAt,
+} from "./repositories/mapExits";
 
 const app = express();
 const SLOW_REQUEST_LOG_THRESHOLD_MS = 2000;
@@ -2891,4 +2901,107 @@ app.get("/user-online-stats", async (request, response) => {
     }
 });
 
+
+// --- Map Exit Routes (Etapa 2) ---
+
+app.get("/internal/map-exits/:mapId", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.mapId);
+        const exits = await getMapExits(mapId);
+        response.json(exits);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/map-exits/:mapId/incoming", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.mapId);
+        const exits = await getIncomingExits(mapId);
+        response.json(exits);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.post("/internal/map-exits", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        const { sourceMapId, sourceX, sourceY, destinationMapId, destinationX, destinationY } = request.body;
+        if (!sourceMapId || !sourceX || !sourceY || !destinationMapId || !destinationX || !destinationY) {
+            response.status(400).json({ error: "All fields required" });
+            return;
+        }
+        const result = await createExit(sourceMapId, sourceX, sourceY, destinationMapId, destinationX, destinationY, session.account._id);
+        if (result.ok) { response.status(201).json({ success: true }); }
+        else { response.status(400).json({ error: result.reason }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.post("/internal/map-exits/round-trip", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        const { mapAId, mapAX, mapAY, mapBId, mapBX, mapBY } = request.body;
+        const result = await createRoundTripExit(mapAId, mapAX, mapAY, mapBId, mapBX, mapBY, session.account._id);
+        if (result.ok) { response.status(201).json({ exitsCreated: result.exits }); }
+        else { response.status(400).json({ error: result.reason }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.put("/internal/map-exits/:mapId/:x/:y", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        const sourceMapId = Number(request.params.mapId);
+        const sourceX = Number(request.params.x);
+        const sourceY = Number(request.params.y);
+        const { destinationMapId, destinationX, destinationY } = request.body;
+        const result = await updateExit(sourceMapId, sourceX, sourceY, destinationMapId, destinationX, destinationY);
+        if (result.ok) { response.json({ success: true }); }
+        else { response.status(400).json({ error: result.reason }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.delete("/internal/map-exits/:mapId/:x/:y", requireAuth, async (request, response) => {
+    try {
+        const sourceMapId = Number(request.params.mapId);
+        const sourceX = Number(request.params.x);
+        const sourceY = Number(request.params.y);
+        const deleted = await deleteExit(sourceMapId, sourceX, sourceY);
+        if (deleted) { response.json({ success: true }); }
+        else { response.status(404).json({ error: "Exit not found" }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.get("/internal/map-exits/orphans/list", requireAuth, async (request, response) => {
+    try {
+        const orphans = await listOrphanMaps();
+        response.json(orphans);
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
 void start();
