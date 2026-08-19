@@ -132,6 +132,17 @@ import {
     listUserOnlineStats,
 } from "./repositories/userOnlineStats";
 import { createChallengeHistory } from "./repositories/challenges";
+import {
+    createUserMap,
+    getUserMap,
+    listUserMaps,
+    listPublishedUserMaps,
+    updateUserMapStatus,
+    checkMapOwnership,
+    getUserMapQuota,
+    USER_MAP_ID_MIN,
+    USER_MAP_ID_MAX,
+} from "./repositories/userMaps";
 
 const app = express();
 const SLOW_REQUEST_LOG_THRESHOLD_MS = 2000;
@@ -740,9 +751,9 @@ app.put("/admin/game-data/balance", async (request, response) => {
     }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════�?
 //  Modo construccion: subir graficos y pintar mapas
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════�?
 
 /**
  * Sube un PNG y lo registra como grafico del motor.
@@ -2891,4 +2902,130 @@ app.get("/user-online-stats", async (request, response) => {
     }
 });
 
+
+// --- User Map Sandbox Routes (Etapa 5) ---
+
+app.post("/internal/user-maps", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        const { name, terrain, zone } = request.body;
+        if (!name || typeof name !== "string") {
+            response.status(400).json({ error: "name is required" });
+            return;
+        }
+        const result = await createUserMap(session.session.account._id, name, terrain || "", zone || "");
+        if (result.ok) {
+            response.status(201).json(result.map);
+        } else {
+            response.status(400).json({ error: result.reason });
+        }
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/user-maps", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        const maps = await listUserMaps(session.session.account._id);
+        response.json(maps);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/user-maps/quota", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        const quota = await getUserMapQuota(session.session.account._id);
+        response.json(quota);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/user-maps/published", async (request, response) => {
+    try {
+        const page = typeof request.query.page === "string" ? Number(request.query.page) : 1;
+        const limit = typeof request.query.limit === "string" ? Number(request.query.limit) : 20;
+        const result = await listPublishedUserMaps(page, limit);
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/user-maps/:id", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.id);
+        if (isNaN(mapId) || mapId < USER_MAP_ID_MIN || mapId > USER_MAP_ID_MAX) {
+            response.status(404).json({ error: "Map not found" });
+            return;
+        }
+        const map = await getUserMap(mapId);
+        if (!map) {
+            response.status(404).json({ error: "Map not found" });
+            return;
+        }
+        // Only return if published or owned by the requesting user
+        const session = await getAuthorizedSession(request);
+        if (map.status !== "published" && (!session || session.session.account._id !== map.ownerAccountId)) {
+            response.status(404).json({ error: "Map not found" });
+            return;
+        }
+        response.json(map);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.patch("/internal/user-maps/:id/status", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.id);
+        const session = await getAuthorizedSession(request);
+        if (!session) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        const { status } = request.body;
+        const validStatuses = ["draft", "proposed", "published", "archived"];
+        if (!validStatuses.includes(status)) {
+            response.status(400).json({ error: "Invalid status: must be draft, proposed, published, or archived" });
+            return;
+        }
+        const result = await updateUserMapStatus(mapId, session.session.account._id, status);
+        if (result.ok) {
+            response.json({ success: true });
+        } else {
+            response.status(403).json({ error: result.reason });
+        }
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
 void start();
+

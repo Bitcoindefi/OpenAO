@@ -21,6 +21,10 @@ type Config = {
   gameDataAdminEmail: string;
   gameDataAdminAccountId: string | null;
   gameDataAdminProxyToken: string | null;
+  userMapQuotaMaps: number;
+  userMapQuotaAssetBytes: number;
+  userMapQuotaNpcs: number;
+  userMapQuotaObjects: number;
 };
 
 const projectRoot = path.resolve(__dirname, "..");
@@ -97,6 +101,10 @@ const config: Config = {
   gameDataAdminEmail: (process.env.GAME_DATA_ADMIN_EMAIL?.trim() || "").toLowerCase(),
   gameDataAdminAccountId: process.env.GAME_DATA_ADMIN_ACCOUNT_ID?.trim() || null,
   gameDataAdminProxyToken: process.env.GAME_DATA_ADMIN_PROXY_TOKEN?.trim() || null,
+  userMapQuotaMaps: getOptionalNumberEnv("USER_MAP_QUOTA_MAPS", 5),
+  userMapQuotaAssetBytes: getOptionalNumberEnv("USER_MAP_QUOTA_ASSET_BYTES", 10 * 1024 * 1024),
+  userMapQuotaNpcs: getOptionalNumberEnv("USER_MAP_QUOTA_NPCS", 20),
+  userMapQuotaObjects: getOptionalNumberEnv("USER_MAP_QUOTA_OBJECTS", 50),
 };
 
 export default config;
