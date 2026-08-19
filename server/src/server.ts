@@ -943,6 +943,11 @@ createDynamicScheduler(
 
 createDynamicScheduler(
     () => FLOOR_ITEM_SWEEP_CHECK_MS,
+    function () {
+        return processFloorItemSweepTick(Date.now());
+    },
+);
+
 void saveOnlineStatsSnapshot();
 
 let isShuttingDown = false;
@@ -991,13 +996,23 @@ async function gracefulShutdown(signal: string) {
             console.error("[Servidor] Error al desmarcar personajes durante apagado:", e);
         }
 
-        // 3. Cerrar servidores WebSocket y HTTP
-        if (wsServer && typeof wsServer.close === "function") {
-            wsServer.close();
-        }
-        if (httpServer && typeof httpServer.close === "function") {
-            httpServer.close();
-        }
+        // 3. Cerrar servidores WebSocket y HTTP ordenadamente
+        await Promise.all([
+            new Promise<void>((resolve) => {
+                if (wsServer && typeof wsServer.close === "function") {
+                    wsServer.close(() => resolve());
+                } else {
+                    resolve();
+                }
+            }),
+            new Promise<void>((resolve) => {
+                if (httpServer && typeof httpServer.close === "function") {
+                    httpServer.close(() => resolve());
+                } else {
+                    resolve();
+                }
+            }),
+        ]);
     } finally {
         clearTimeout(forceExitTimeout);
         process.exit(0);
