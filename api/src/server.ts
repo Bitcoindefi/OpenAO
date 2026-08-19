@@ -740,9 +740,9 @@ app.put("/admin/game-data/balance", async (request, response) => {
     }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════�?
 //  Modo construccion: subir graficos y pintar mapas
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════�?
 
 /**
  * Sube un PNG y lo registra como grafico del motor.
@@ -2898,7 +2898,7 @@ app.post("/internal/game-data/maps/publish/:mapId", requireAuth, async (request,
     try {
         const session = await getAuthorizedSession(request);
         if (!session) { response.status(401).json({ error: "Unauthorized" }); return; }
-        if (!isAuthorizedGameDataAdmin(session)) {
+        if (!isAuthorizedGameDataAdmin(session.session)) {
             response.status(403).json({ error: "Only game data admins can publish maps" });
             return;
         }
@@ -2915,3 +2915,4 @@ app.post("/internal/game-data/maps/publish/:mapId", requireAuth, async (request,
     }
 });
 void start();
+
