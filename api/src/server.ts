@@ -2,6 +2,7 @@ import express from "express";
 import config from "./config";
 import pool from "./db";
 import { requireAuth } from "./middleware/auth";
+import path from "path";
 import {
     confirmPasswordReset,
     consumeGameTicket,
@@ -108,6 +109,14 @@ import {
     revertMap,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import {
+    createOrUpdateExit,
+    createRoundTripExit,
+    deleteExit,
+    findInaccessibleMaps,
+    findOrphanExits,
+    listExits,
+} from "./lib/mapExits";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -1035,6 +1044,167 @@ app.get("/admin/game-data/maps/:mapNum/status", async (request, response) => {
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+
+/**
+ * Lista las salidas de un mapa y las entrantes (otros mapas que apuntan a este).
+ */
+app.get("/admin/game-data/maps/:mapNum/exits", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const mapsSourceDir = require("path").join(__dirname, "mapas_source");
+        const result = await listExits(mapsSourceDir, mapNum);
+        response.json(result);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
+ * Crea o actualiza una salida en un mapa.
+ */
+app.put("/admin/game-data/maps/:mapNum/exits/:x/:y", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const x = Number.parseInt(request.params.x ?? "", 10);
+        const y = Number.parseInt(request.params.y ?? "", 10);
+
+        if (![mapNum, x, y].every((n) => Number.isInteger(n) && n > 0)) {
+            response.status(400).json({ error: "Parametros invalidos." });
+            return;
+        }
+
+        const { destMap, destX, destY } = request.body || {};
+        if (!destMap || !Number.isInteger(destMap) || !Number.isInteger(destX) || !Number.isInteger(destY)) {
+            response.status(400).json({ error: "Cuerpo invalido. Se requiere { destMap, destX, destY }." });
+            return;
+        }
+
+        const mapsSourceDir = require("path").join(__dirname, "..", "mapas_source");
+        const result = await createOrUpdateExit(mapsSourceDir, mapNum, x, y, destMap, destX, destY);
+        
+        if (!result.ok) {
+            response.status(422).json({ error: result.reason, detail: result.detail });
+            return;
+        }
+        
+        response.status(200).json({ ok: true });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
+ * Crea una salida de ida y vuelta (pair) en una sola operacion.
+ */
+app.post("/admin/game-data/maps/:mapNum/exits/:x/:y/round-trip", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const x = Number.parseInt(request.params.x ?? "", 10);
+        const y = Number.parseInt(request.params.y ?? "", 10);
+        const { destMap, destX, destY } = request.body || {};
+
+        if (![mapNum, x, y, destMap, destX, destY].every((n) => Number.isInteger(n) && n > 0)) {
+            response.status(400).json({ error: "Parametros invalidos. Se requiere body: { destMap, destX, destY }." });
+            return;
+        }
+
+        const mapsSourceDir = require("path").join(__dirname, "..", "mapas_source");
+        const result = await createRoundTripExit(mapsSourceDir, mapNum, x, y, destMap, destX, destY);
+        
+        if (!result.ok) {
+            response.status(422).json({ error: result.reason, detail: result.detail });
+            return;
+        }
+        
+        response.status(201).json({ ok: true });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
+ * Borra una salida de un mapa.
+ */
+app.delete("/admin/game-data/maps/:mapNum/exits/:x/:y", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const x = Number.parseInt(request.params.x ?? "", 10);
+        const y = Number.parseInt(request.params.y ?? "", 10);
+
+        if (![mapNum, x, y].every((n) => Number.isInteger(n) && n > 0)) {
+            response.status(400).json({ error: "Parametros invalidos." });
+            return;
+        }
+
+        const mapsSourceDir = require("path").join(__dirname, "..", "mapas_source");
+        const result = await deleteExit(mapsSourceDir, mapNum, x, y);
+        
+        if (!result.ok) {
+            response.status(404).json({ error: result.reason, detail: result.detail });
+            return;
+        }
+        
+        response.status(200).json({ ok: true });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
+ * Detecta mapas inalcanzables (sin ninguna salida entrante).
+ */
+app.get("/admin/game-data/maps/inaccessible", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapsSourceDir = require("path").join(__dirname, "..", "mapas_source");
+        const inaccessible = await findInaccessibleMaps(mapsSourceDir);
+        response.json({ inaccessible });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
+ * Detecta salidas huerfanas (apuntan a mapas que ya no existen).
+ */
+app.get("/admin/game-data/maps/orphan-exits", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapsSourceDir = require("path").join(__dirname, "..", "mapas_source");
+        const orphans = await findOrphanExits(mapsSourceDir);
+        response.json({ orphans });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
         response.status(400).json({ error: message });
     }
 });
