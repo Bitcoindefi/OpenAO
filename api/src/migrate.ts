@@ -17,6 +17,22 @@ async function migrate(): Promise<void> {
       ON market_listings(seller_character_id, created_at DESC)
       WHERE status = 'active'
   `);
+
+    // Map exits table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_map_exits (
+          source_map_id INTEGER NOT NULL,
+          source_x INTEGER NOT NULL CHECK (source_x BETWEEN 1 AND 100),
+          source_y INTEGER NOT NULL CHECK (source_y BETWEEN 1 AND 100),
+          destination_map_id INTEGER NOT NULL,
+          destination_x INTEGER NOT NULL CHECK (destination_x BETWEEN 1 AND 100),
+          destination_y INTEGER NOT NULL CHECK (destination_y BETWEEN 1 AND 100),
+          created_by TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (source_map_id, source_x, source_y)
+      );
+    `);
+
     console.log("Database schema applied successfully");
 }
 
