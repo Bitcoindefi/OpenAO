@@ -21,6 +21,10 @@ type Config = {
   gameDataAdminEmail: string;
   gameDataAdminAccountId: string | null;
   gameDataAdminProxyToken: string | null;
+  userMapQuotaMaps: getOptionalNumberEnv("USER_MAP_QUOTA_MAPS", 5),
+  userMapQuotaAssetBytes: getOptionalNumberEnv("USER_MAP_QUOTA_ASSET_BYTES", 10 * 1024 * 1024),
+  userMapQuotaNpcs: getOptionalNumberEnv("USER_MAP_QUOTA_NPCS", 20),
+  userMapQuotaObjects: getOptionalNumberEnv("USER_MAP_QUOTA_OBJECTS", 50),
 };
 
 const projectRoot = path.resolve(__dirname, "..");
