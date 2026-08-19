@@ -943,9 +943,67 @@ createDynamicScheduler(
 
 createDynamicScheduler(
     () => FLOOR_ITEM_SWEEP_CHECK_MS,
-    function () {
-        return processFloorItemSweepTick(Date.now());
-    },
-);
-
 void saveOnlineStatsSnapshot();
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string) {
+    if (isShuttingDown) {
+        return;
+    }
+    isShuttingDown = true;
+
+    console.log(`[Servidor] Señal ${signal} recibida. Iniciando apagado graceful...`);
+
+    // Timeout safety fallback so process exits even if API is unresponsive
+    const forceExitTimeout = setTimeout(() => {
+        console.error("[Servidor] Timeout en apagado graceful. Forzando salida.");
+        process.exit(1);
+    }, 5000);
+    if (typeof forceExitTimeout.unref === "function") {
+        forceExitTimeout.unref();
+    }
+
+    try {
+        // 1. Notificar a los clientes conectados
+        try {
+            if (handleProtocol && typeof handleProtocol.consoleToAll === "function") {
+                handleProtocol.consoleToAll("[Servidor] El servidor se está apagando.", "#E69500", 1, 0);
+            }
+        } catch (e) {
+            console.error("[Servidor] Error al notificar clientes durante apagado:", e);
+        }
+
+        // 2. Desmarcar personajes conectados en la base de datos
+        try {
+            const resetCharactersResponse = (await funct.fetchUrl("/internal/characters/reset-connected", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: vars.tokenAuth,
+                },
+            })) as { updated: number };
+
+            console.log(
+                `[Servidor] Personajes desmarcados al apagar (${signal}): ${resetCharactersResponse?.updated ?? 0}.`,
+            );
+        } catch (e) {
+            console.error("[Servidor] Error al desmarcar personajes durante apagado:", e);
+        }
+
+        // 3. Cerrar servidores WebSocket y HTTP
+        if (wsServer && typeof wsServer.close === "function") {
+            wsServer.close();
+        }
+        if (httpServer && typeof httpServer.close === "function") {
+            httpServer.close();
+        }
+    } finally {
+        clearTimeout(forceExitTimeout);
+        process.exit(0);
+    }
+}
+
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+
