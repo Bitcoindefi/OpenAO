@@ -132,6 +132,14 @@ import {
     listUserOnlineStats,
 } from "./repositories/userOnlineStats";
 import { createChallengeHistory } from "./repositories/challenges";
+import {
+    placeObject,
+    moveObject,
+    removeObject,
+    getMapObjects,
+    setObjectState,
+    placeStructure,
+} from "./repositories/mapObjects";
 
 const app = express();
 const SLOW_REQUEST_LOG_THRESHOLD_MS = 2000;
@@ -2891,4 +2899,77 @@ app.get("/user-online-stats", async (request, response) => {
     }
 });
 
+
+// --- Map Object Routes (Etapa 2) ---
+
+app.get("/internal/map-objects/:mapId", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.mapId);
+        const objects = await getMapObjects(mapId);
+        response.json(objects);
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.post("/internal/map-objects", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) { response.status(401).json({ error: "Unauthorized" }); return; }
+        const { mapId, x, y, objIndex, amount } = request.body;
+        const result = await placeObject(mapId, x, y, objIndex, amount || 1, session.account._id);
+        if (result.ok) { response.status(201).json({ id: result.id }); }
+        else { response.status(400).json({ error: result.reason }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.put("/internal/map-objects/:id/move", requireAuth, async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const { x, y } = request.body;
+        const moved = await moveObject(id, x, y);
+        if (moved) { response.json({ success: true }); }
+        else { response.status(404).json({ error: "Object not found" }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.delete("/internal/map-objects/:id", requireAuth, async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const removed = await removeObject(id);
+        if (removed) { response.json({ success: true }); }
+        else { response.status(404).json({ error: "Object not found" }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.put("/internal/map-objects/:id/state", requireAuth, async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const { state } = request.body;
+        const updated = await setObjectState(id, state);
+        if (updated) { response.json({ success: true }); }
+        else { response.status(404).json({ error: "Object not found" }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.post("/internal/map-objects/structure", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) { response.status(401).json({ error: "Unauthorized" }); return; }
+        const { mapId, tiles } = request.body;
+        const result = await placeStructure(mapId, tiles, session.account._id);
+        if (result.ok) { response.status(201).json({ ids: result.ids }); }
+        else { response.status(400).json({ error: result.reason }); }
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
 void start();
