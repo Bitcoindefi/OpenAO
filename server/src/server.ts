@@ -364,6 +364,7 @@ async function processFloorItemSweepTick(now: number) {
 
 function trackClientActivity(ws: RuntimeClient, packageID: number) {
     const now = Date.now();
+    ws.lastActivityAt = now;
     const isPingPacket = packageID === pkg.serverPacketID.ping;
 
     ws.packetCount = Number(ws.packetCount ?? 0) + 1;
@@ -418,7 +419,7 @@ function trackClientActivity(ws: RuntimeClient, packageID: number) {
     }
 
     ws.lastPacketAt = now;
-    ws.lastActivityAt = now;
+    // ws.lastActivityAt = now;  // moved up - now updated for ping packets too
 }
 
 (async () => {
