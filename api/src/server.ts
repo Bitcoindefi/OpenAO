@@ -2891,4 +2891,27 @@ app.get("/user-online-stats", async (request, response) => {
     }
 });
 
+
+// --- Map Publish / Live Reload Routes (Etapa 3) ---
+
+app.post("/internal/game-data/maps/publish/:mapId", requireAuth, async (request, response) => {
+    try {
+        const session = await getAuthorizedSession(request);
+        if (!session) { response.status(401).json({ error: "Unauthorized" }); return; }
+        if (!isAuthorizedGameDataAdmin(session)) {
+            response.status(403).json({ error: "Only game data admins can publish maps" });
+            return;
+        }
+        const mapId = Number(request.params.mapId);
+        if (isNaN(mapId) || mapId < 1) {
+            response.status(400).json({ error: "Invalid map ID" });
+            return;
+        }
+        // The game server will reload the map from disk
+        // In a future iteration, this will move drafts to published in the DB
+        response.json({ success: true, mapId, message: "Map publish triggered. Game server will reload from files on next poll." });
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
 void start();
