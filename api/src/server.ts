@@ -751,9 +751,9 @@ app.put("/admin/game-data/balance", async (request, response) => {
     }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════�?
 //  Modo construccion: subir graficos y pintar mapas
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════�?
 
 /**
  * Sube un PNG y lo registra como grafico del motor.
@@ -2917,7 +2917,7 @@ app.post("/internal/user-maps", requireAuth, async (request, response) => {
             response.status(400).json({ error: "name is required" });
             return;
         }
-        const result = await createUserMap(session.account._id, name, terrain || "", zone || "");
+        const result = await createUserMap(session.session.account._id, name, terrain || "", zone || "");
         if (result.ok) {
             response.status(201).json(result.map);
         } else {
@@ -2937,7 +2937,7 @@ app.get("/internal/user-maps", requireAuth, async (request, response) => {
             response.status(401).json({ error: "Unauthorized" });
             return;
         }
-        const maps = await listUserMaps(session.account._id);
+        const maps = await listUserMaps(session.session.account._id);
         response.json(maps);
     } catch (error) {
         response.status(500).json({
@@ -2953,7 +2953,7 @@ app.get("/internal/user-maps/quota", requireAuth, async (request, response) => {
             response.status(401).json({ error: "Unauthorized" });
             return;
         }
-        const quota = await getUserMapQuota(session.account._id);
+        const quota = await getUserMapQuota(session.session.account._id);
         response.json(quota);
     } catch (error) {
         response.status(500).json({
@@ -2989,7 +2989,7 @@ app.get("/internal/user-maps/:id", requireAuth, async (request, response) => {
         }
         // Only return if published or owned by the requesting user
         const session = await getAuthorizedSession(request);
-        if (map.status !== "published" && (!session || session.account._id !== map.ownerAccountId)) {
+        if (map.status !== "published" && (!session || session.session.account._id !== map.ownerAccountId)) {
             response.status(404).json({ error: "Map not found" });
             return;
         }
@@ -3015,7 +3015,7 @@ app.patch("/internal/user-maps/:id/status", requireAuth, async (request, respons
             response.status(400).json({ error: "Invalid status: must be draft, proposed, published, or archived" });
             return;
         }
-        const result = await updateUserMapStatus(mapId, session.account._id, status);
+        const result = await updateUserMapStatus(mapId, session.session.account._id, status);
         if (result.ok) {
             response.json({ success: true });
         } else {
@@ -3028,3 +3028,4 @@ app.patch("/internal/user-maps/:id/status", requireAuth, async (request, respons
     }
 });
 void start();
+
