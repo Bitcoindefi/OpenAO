@@ -353,6 +353,7 @@ app.get("/ranking", async (request, response) => {
         const result = await listCharacterRanking({ sort, classId });
         response.json(result);
     } catch (error) {
+        console.error("Error in GET /ranking handler:", error);
         response.status(500).json({
             error: error instanceof Error ? error.message : "Unexpected error",
         });
