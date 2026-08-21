@@ -229,6 +229,8 @@ export function useGameSession({
                 activeSocketInstanceRef.current === socketInstanceId,
             );
 
+        const reconnectTimeoutIdRef = useRef<number | null>(null);
+
         const clearPing = () => {
             if (pingIntervalRef.current) {
                 window.clearInterval(pingIntervalRef.current);
@@ -474,17 +476,98 @@ export function useGameSession({
                 });
         };
 
+        const MAX_RECONNECT_ATTEMPTS = 6;
+        const BASE_RECONNECT_DELAY_MS = 1000;
+        const MAX_RECONNECT_DELAY_MS = 30000;
+
+        const scheduleReconnect = (attempt: number) => {
+            if (
+                activeSessionKeyRef.current !== connection.sessionKey ||
+                !isClientReadyForConnection
+            ) {
+                return;
+            }
+
+            if (attempt >= MAX_RECONNECT_ATTEMPTS) {
+                emitStatusRef.current({
+                    connected: false,
+                    connecting: false,
+                    error: "No se pudo reconectar. Por favor, recarga la página.",
+                });
+                return;
+            }
+
+            const delay = Math.min(
+                BASE_RECONNECT_DELAY_MS * Math.pow(2, attempt),
+                MAX_RECONNECT_DELAY_MS,
+            );
+            const remainingSec = Math.ceil(delay / 1000);
+
+            emitStatusRef.current({
+                connected: false,
+                connecting: true,
+                error: `Reconectando… (intento ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS}, en ${remainingSec}s)`,
+            });
+
+            reconnectTimeoutIdRef.current = window.setTimeout(() => {
+                if (
+                    activeSessionKeyRef.current !== connection.sessionKey ||
+                    !isClientReadyForConnection
+                ) {
+                    return;
+                }
+                connectSocket(attempt + 1);
+            }, delay);
+        };
+
+        const connectSocket = (reconnectAttempt = 0) => {
+            clearPing();
+            const previousSocket = websocketRef.current;
+            if (previousSocket) {
+                previousSocket.onclose = null;
+                previousSocket.onerror = null;
+                previousSocket.close();
+            }
+
+            const ws = new WebSocket(connection.wsUrl);
+            ws.binaryType = "arraybuffer";
+            websocketRef.current = ws;
+
+            if (reconnectAttempt === 0) {
+                emitStatusRef.current({ connected: false, connecting: true });
+            }
+
+            ws.onopen = socket.onopen;
+            ws.onmessage = socket.onmessage;
+
+            ws.onerror = () => {
+                if (websocketRef.current !== ws) {
+                    return;
+                }
+                setIsSceneReadyRef.current(false);
+                scheduleReconnect(reconnectAttempt);
+            };
+
+            ws.onclose = () => {
+                clearPing();
+                if (
+                    websocketRef.current !== ws ||
+                    activeSessionKeyRef.current !== connection.sessionKey
+                ) {
+                    return;
+                }
+                setIsSceneReadyRef.current(false);
+                scheduleReconnect(reconnectAttempt);
+            };
+        };
+
         socket.onerror = () => {
             if (!isCurrentSocketInstance(socket)) {
                 return;
             }
 
             setIsSceneReadyRef.current(false);
-            emitStatusRef.current({
-                connected: false,
-                connecting: false,
-                error: "No se pudo establecer la conexion websocket.",
-            });
+            scheduleReconnect(0);
         };
 
         socket.onclose = () => {
@@ -494,16 +577,15 @@ export function useGameSession({
                 isCurrentSocketInstance(socket)
             ) {
                 setIsSceneReadyRef.current(false);
-                const previousError = latestStatusRef.current.error;
-                emitStatusRef.current({
-                    connected: false,
-                    connecting: false,
-                    error: previousError || "Conexion cerrada.",
-                });
+                scheduleReconnect(0);
             }
         };
 
         return () => {
+            if (reconnectTimeoutIdRef.current !== null) {
+                window.clearTimeout(reconnectTimeoutIdRef.current);
+                reconnectTimeoutIdRef.current = null;
+            }
             if (
                 activeSessionKeyRef.current === connection.sessionKey &&
                 isCurrentSocketInstance(socket)
@@ -555,3 +637,4 @@ export function useGameSession({
         websocketRef,
     ]);
 }
+
