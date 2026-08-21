@@ -229,7 +229,7 @@ export function useGameSession({
                 activeSocketInstanceRef.current === socketInstanceId,
             );
 
-        const reconnectTimeoutIdRef = useRef<number | null>(null);
+        let reconnectTimeoutId: number | null = null;
 
         const clearPing = () => {
             if (pingIntervalRef.current) {
@@ -509,7 +509,7 @@ export function useGameSession({
                 error: `Reconectando… (intento ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS}, en ${remainingSec}s)`,
             });
 
-            reconnectTimeoutIdRef.current = window.setTimeout(() => {
+            reconnectTimeoutId = window.setTimeout(() => {
                 if (
                     activeSessionKeyRef.current !== connection.sessionKey ||
                     !isClientReadyForConnection
@@ -582,9 +582,9 @@ export function useGameSession({
         };
 
         return () => {
-            if (reconnectTimeoutIdRef.current !== null) {
-                window.clearTimeout(reconnectTimeoutIdRef.current);
-                reconnectTimeoutIdRef.current = null;
+            if (reconnectTimeoutId !== null) {
+                window.clearTimeout(reconnectTimeoutId);
+                reconnectTimeoutId = null;
             }
             if (
                 activeSessionKeyRef.current === connection.sessionKey &&
