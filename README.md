@@ -191,3 +191,4 @@ Si querés arrancar por algo chico, mirá las etiquetadas [`good first issue`](h
 ![Captura 3](screenshots/3.jpg)
 
 ![Captura 4](screenshots/4.jpg)
+# bounty-fix-ref: https://github.com/Bitcoindefi/OpenAO/issues/14
