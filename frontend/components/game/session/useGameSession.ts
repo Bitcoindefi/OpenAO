@@ -504,6 +504,30 @@ export function useGameSession({
                     reconnectTimeoutId = null;
                 }
 
+                // Reset reconnect counter on successful connection so the next
+                // disconnect starts back at attempt 0 instead of where we left off.
+                ws.onerror = () => {
+                    if (!isCurrentSocketInstance(ws)) {
+                        return;
+                    }
+                    setIsSceneReadyRef.current(false);
+                    scheduleReconnect(0);
+                };
+
+                ws.onclose = () => {
+                    clearPing();
+                    if (
+                        activeSessionKeyRef.current !== connection.sessionKey ||
+                        !isCurrentSocketInstance(ws)
+                    ) {
+                        return;
+                    }
+                    setIsSceneReadyRef.current(false);
+                    scheduleReconnect(0);
+                };
+
+                emitStatusRef.current({ connected: true, connecting: false });
+
                 const sendPing = () => {
                     if (ws.readyState !== WebSocket.OPEN) {
                         return;
