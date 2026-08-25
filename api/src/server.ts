@@ -96,15 +96,20 @@ import {
     upsertGameBalance,
 } from "./repositories/gameBalance";
 import {
+    checkIsolatedRegions,
     clearTile,
     discardDrafts,
     getGraphicContent,
     getMapStatus,
     listGraphics,
     listMapOverrides,
+    paintRectangle,
+    paintRectangleSchema,
     paintTiles,
     paintTilesSchema,
     publishMap,
+    queryRegion,
+    queryRegionSchema,
     revertMap,
     uploadGraphic,
 } from "./repositories/worldBuilder";
@@ -866,13 +871,23 @@ app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
             return;
         }
 
-        response.json(
-            await paintTiles(
-                mapNum,
-                parsed.data.tiles,
-                authorized.session.account._id,
-            ),
+        const result = await paintTiles(
+            mapNum,
+            parsed.data.tiles,
+            authorized.session.account._id,
         );
+
+        const hasBlockedChange = parsed.data.tiles.some(
+            (tile) => tile.blocked === true || tile.blocked === false,
+        );
+
+        if (hasBlockedChange) {
+            const isolation = await checkIsolatedRegions(mapNum);
+            response.json({ ...result, isolatedRegions: isolation.isolated });
+            return;
+        }
+
+        response.json(result);
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -901,6 +916,118 @@ app.delete(
             }
 
             response.json({ removed: await clearTile(mapNum, x, y, layer) });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Pinta un rectangulo de tiles como borrador en una sola operacion atomica. */
+app.post(
+    "/admin/game-data/maps/:mapNum/tiles/paint-rectangle",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+            if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                response.status(400).json({ error: "Numero de mapa invalido." });
+                return;
+            }
+
+            const parsed = paintRectangleSchema.safeParse(request.body);
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            const result = await paintRectangle(
+                mapNum,
+                parsed.data,
+                authorized.session.account._id,
+            );
+
+            const hasBlockedChange =
+                parsed.data.blocked === true || parsed.data.blocked === false;
+
+            if (hasBlockedChange) {
+                const isolation = await checkIsolatedRegions(mapNum);
+                response.json({ ...result, isolatedRegions: isolation.isolated });
+                return;
+            }
+
+            response.json(result);
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Devuelve los tiles (overrides) dentro de un rectangulo del mapa. */
+app.get(
+    "/admin/game-data/maps/:mapNum/tiles/region",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+            if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                response.status(400).json({ error: "Numero de mapa invalido." });
+                return;
+            }
+
+            const parsed = queryRegionSchema.safeParse(request.query);
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            const overrides = await queryRegion(mapNum, parsed.data);
+            response.json({ mapNum, overrides });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/**
+ * Verifica si hay regiones caminables aisladas en un mapa.
+ *
+ * Carga el mapa base, aplica los overrides publicados y ejecuta BFS para
+ * detectar casillas caminables inalcanzables desde una semilla.
+ */
+app.post(
+    "/admin/game-data/maps/:mapNum/tiles/blocked-check",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+            if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                response.status(400).json({ error: "Numero de mapa invalido." });
+                return;
+            }
+
+            const result = await checkIsolatedRegions(mapNum);
+            response.json(result);
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
