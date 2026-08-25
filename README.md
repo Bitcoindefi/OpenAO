@@ -163,31 +163,69 @@ pnpm install
 pnpm dev
 ```
 
-Abrir `http://localhost:3000`.
+El frontend queda en `http://localhost:3000`.
 
-## Arquitectura
+> **Nota:** El frontend requiere los mapas optimizados en `frontend/public/maps_optimized/`. En desarrollo, se generan automáticamente al correr `pnpm dev` gracias al script de exportación. Si ves errores 404 para `/maps_optimized/mapa_*.json`, corré manualmente:
+> ```bash
+> cd frontend && pnpm export-frontend-maps
+> ```
 
-| Componente | Carpeta | Puerto |
-|---|---|---|
-| API REST, autenticación y datos del juego | `api/` | 3001 |
-| Server del juego, WebSocket con protocolo binario | `server/` | 7666 |
-| Frontend, Next.js + PixiJS | `frontend/` | 3000 |
-| PostgreSQL | `database/aoweb.sql` | 5432 |
+---
 
-## Contribuir
+## Despliegue con Docker
 
-Las issues abiertas están en [github.com/Bitcoindefi/OpenAO/issues](https://github.com/Bitcoindefi/OpenAO/issues).
+El proyecto incluye Dockerfiles para cada servicio. La forma recomendada es usar `docker-compose` desde la raíz del repo.
 
-El proyecto grande en curso es el **modo construcción** ([#2](https://github.com/Bitcoindefi/OpenAO/issues/2)): editar el mundo del juego desde el navegador y publicar los cambios en vivo. Está dividido en etapas, y las que empiezan por `etapa-0-base` son las que desbloquean el resto.
+### Build de las imágenes
 
-Si querés arrancar por algo chico, mirá las etiquetadas [`good first issue`](https://github.com/Bitcoindefi/OpenAO/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+```bash
+docker compose build
+```
 
-## Capturas
+Esto construye tres imágenes:
+- `aoweb-api`: La API REST
+- `aoweb-server`: El servidor WebSocket del juego
+- `aoweb-frontend`: El frontend Next.js (incluye generación automática de mapas optimizados)
 
-![Captura 1](screenshots/1.jpg)
+### Levantar todo
 
-![Captura 2](screenshots/2.jpg)
+```bash
+docker compose up -d
+```
 
-![Captura 3](screenshots/3.jpg)
+Los servicios quedan en:
+- Frontend: `http://localhost:3000`
+- API: `http://localhost:3001`
+- Server: `ws://localhost:7666`
 
-![Captura 4](screenshots/4.jpg)
+> **Importante:** El build del frontend **genera automáticamente los mapas optimizados** a partir de `api/src/mapas_source/` durante la construcción de la imagen Docker. No es necesario generar los mapas manualmente antes de hacer `docker compose build`.
+
+### Variables de entorno para Docker
+
+Cada servicio tiene su archivo `.env.docker.example`. Copiá y ajustá:
+
+```bash
+cp api/.env.docker.example api/.env.docker
+cp server/.env.docker.example server/.env.docker
+cp frontend/.env.docker.example frontend/.env.docker
+```
+
+Luego editalos con tus valores de producción.
+
+---
+
+## Estructura del proyecto
+
+```
+├── api/                 # API REST (Node.js + Fastify + Prisma)
+├── server/              # Servidor WebSocket del juego (TypeScript)
+├── frontend/            # Frontend Next.js (React)
+├── database/            # Dump SQL inicial
+└── docker-compose.yml   # Orquestación local
+```
+
+---
+
+## Licencia
+
+MIT
