@@ -1,37 +1,28 @@
 {
-    "name": "falopita",
-    "version": "0.1.0",
-    "private": true,
-    "scripts": {
-        "dev": "next dev --turbopack --hostname 0.0.0.0",
-        "build": "next build",
-        "start": "next start",
-        "lint": "eslint",
-        "generate:headswithfile": "node ./scripts/generate-headswithfile.mjs"
-    },
-    "dependencies": {
-        "dotenv": "^17.4.2",
-        "howler": "^2.2.4",
-        "lucide-react": "^1.16.0",
-        "next": "^16.2.4",
-        "pixi.js": "^8.17.1",
-        "react": "^19.2.5",
-        "react-dom": "^19.2.5"
-    },
-    "devDependencies": {
-        "@tailwindcss/postcss": "^4.2.4",
-        "@types/howler": "^2.2.12",
-        "@types/node": "^25.8.0",
-        "@types/react": "^19.2.14",
-        "@types/react-dom": "^19.2.3",
-        "eslint": "^9.39.4",
-        "eslint-config-next": "^16.2.6",
-        "tailwindcss": "^4.2.4",
-        "typescript": "^6.0.3"
-    },
-    "pnpm": {
-        "onlyBuiltDependencies": [
-            "unrs-resolver"
-        ]
-    }
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "export-frontend-maps": "tsx ../api/src/scripts/exportFrontendOptimizedMaps.ts"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.5",
+    "postcss": "^8",
+    "tailwindcss": "^3.4.1",
+    "tsx": "^4.16.2",
+    "typescript": "^5"
+  }
 }

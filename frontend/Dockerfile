@@ -1,62 +1,48 @@
-FROM node:24-bookworm-slim AS base
+# syntax=docker/dockerfile:1
+FROM node:22-alpine AS base
 
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-
-RUN corepack enable
-
+# Install dependencies only when needed
 FROM base AS deps
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml ./
-COPY pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile
 
-FROM deps AS build
+# Generate the optimized maps
+FROM base AS maps-generator
 WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json pnpm-lock.yaml* ./
+COPY ../api/src/mapas_source ./api/src/mapas_source
+RUN pnpm export-frontend-maps
 
-ARG API_BASE_URL=http://localhost:3001
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
-ARG NEXT_PUBLIC_WS_URL=ws://localhost:7666
-ARG NEXT_PUBLIC_AOWEB_TEST_MODE=false
-ARG NEXT_PUBLIC_SITE_URL=https://aoweb.app
-ARG SITE_URL=https://aoweb.app
-ARG NEXT_ASSET_CDN_URL
-ARG NEXT_ASSET_CDN_PREFIX
-ARG NEXT_BUILD_ID
-ARG DO_SPACES_ENDPOINT
-ARG DO_SPACES_REGION=nyc3
-ARG DO_SPACES_BUCKET
-ARG DO_SPACES_ACCESS_KEY_ID
-ARG DO_SPACES_SECRET_ACCESS_KEY
-ARG GAME_DATA_ADMIN_PROXY_TOKEN
-
-ENV API_BASE_URL=$API_BASE_URL
-ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
-ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
-ENV NEXT_PUBLIC_AOWEB_TEST_MODE=$NEXT_PUBLIC_AOWEB_TEST_MODE
-ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
-ENV SITE_URL=$SITE_URL
-ENV NEXT_BUILD_ID=$NEXT_BUILD_ID
-ENV GAME_DATA_ADMIN_PROXY_TOKEN=$GAME_DATA_ADMIN_PROXY_TOKEN
-
+# Rebuild the source code only when needed
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=maps-generator /app/public/maps_optimized ./public/maps_optimized
 COPY . .
 RUN pnpm build
 
-FROM base AS runtime
+# Production image, copy all the files and run next
+FROM base AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3000
 
-COPY package.json pnpm-lock.yaml ./
-COPY pnpm-workspace.yaml ./
-RUN pnpm install --prod --frozen-lockfile
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
 
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/public ./public
-COPY --from=build /app/next.config.ts ./next.config.ts
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
 
 EXPOSE 3000
 
-CMD ["pnpm", "start"]
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+CMD ["node", "server.js"]
