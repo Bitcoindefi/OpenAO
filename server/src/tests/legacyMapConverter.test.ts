@@ -86,6 +86,32 @@ describe("Legacy VB6 Argentum Online Map Converter (OpenAO #23)", () => {
         assert.equal(restored.terrain.width, 100);
         assert.equal(restored.terrain.height, 100);
     });
+
+    it("should safely encode large graphic indices (> 32767) without throwing RangeError", () => {
+        const sampleTiles: LegacyTile[][] = [];
+        for (let y = 1; y <= 100; y++) {
+            sampleTiles[y] = [];
+            for (let x = 1; x <= 100; x++) {
+                sampleTiles[y][x] = {
+                    blocked: false,
+                    layer1: 320151, // high OpenAO asset index
+                    layer2: 1000500, // custom uploaded graphic index
+                    layer3: 0,
+                    layer4: 0,
+                    trigger: 0,
+                };
+            }
+        }
+
+        // Must not throw RangeError: The value of "value" is out of range
+        const encoded = encodeVb6BinaryMap(sampleTiles, "Large Index Map");
+        assert.equal(encoded.length, 261 + 100 * 100 * 11);
+        expectMapHeaderValid(encoded);
+
+        const decoded = decodeVb6BinaryMap(encoded);
+        assert.equal(decoded.tiles[1][1].layer1, 32767);
+        assert.equal(decoded.tiles[1][1].layer2, 32767);
+    });
 });
 
 function expectMapHeaderValid(buf: Buffer) {

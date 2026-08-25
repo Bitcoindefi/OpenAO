@@ -517,9 +517,60 @@ async function initializeBalanceFromApi(): Promise<InitializeBalanceResult> {
     };
 }
 
+type BaseTileSnapshot = {
+    blocked?: number;
+    graphicAtLayer?: number;
+};
+
+// Tracks baseline state of tiles before overrides were applied, enabling clean rollback when overrides are removed/deleted
+const baseTileSnapshots = new Map<number, Map<string, BaseTileSnapshot>>();
+const activeMapOverrides = new Map<number, MapTileOverride[]>();
+
+export function clearMapOverrideSnapshots(): void {
+    baseTileSnapshots.clear();
+    activeMapOverrides.clear();
+}
+
 function applyMapTileOverridesToVars(mapNum: number, overrides: MapTileOverride[]): number {
     if (!vars.mapa[mapNum]) {
         return 0;
+    }
+
+    if (!baseTileSnapshots.has(mapNum)) {
+        baseTileSnapshots.set(mapNum, new Map());
+    }
+    const mapSnapshots = baseTileSnapshots.get(mapNum)!;
+
+    // Revert any previously applied overrides that were deleted or unpublished in DB
+    const previousOverrides = activeMapOverrides.get(mapNum) || [];
+    const currentKeys = new Set(overrides.map((o) => `${o.x},${o.y},${o.layer}`));
+
+    for (const prev of previousOverrides) {
+        const key = `${prev.x},${prev.y},${prev.layer}`;
+        if (!currentKeys.has(key)) {
+            const snapshot = mapSnapshots.get(key);
+            const tile = vars.mapa[mapNum]?.[prev.y]?.[prev.x];
+            if (tile && snapshot) {
+                if (snapshot.blocked !== undefined) {
+                    tile.blocked = snapshot.blocked;
+                } else {
+                    delete tile.blocked;
+                }
+
+                if (snapshot.graphicAtLayer !== undefined) {
+                    if (!tile.graphics || typeof tile.graphics !== "object") {
+                        tile.graphics = {};
+                    }
+                    (tile.graphics as Record<number, number>)[prev.layer] = snapshot.graphicAtLayer;
+                } else if (tile.graphics && typeof tile.graphics === "object") {
+                    delete (tile.graphics as Record<number, number>)[prev.layer];
+                    if (Object.keys(tile.graphics).length === 0) {
+                        delete tile.graphics;
+                    }
+                }
+                mapSnapshots.delete(key);
+            }
+        }
     }
 
     let applied = 0;
@@ -533,6 +584,15 @@ function applyMapTileOverridesToVars(mapNum: number, overrides: MapTileOverride[
         }
 
         const tile = vars.mapa[mapNum][y][x];
+        const key = `${x},${y},${layer}`;
+
+        // Snapshot original tile baseline on first modification
+        if (!mapSnapshots.has(key)) {
+            mapSnapshots.set(key, {
+                blocked: tile.blocked,
+                graphicAtLayer: tile.graphics && typeof tile.graphics === "object" ? tile.graphics[layer] : undefined,
+            });
+        }
 
         if (blocked !== null && blocked !== undefined) {
             if (blocked) {
@@ -557,6 +617,8 @@ function applyMapTileOverridesToVars(mapNum: number, overrides: MapTileOverride[
         }
         applied += 1;
     }
+
+    activeMapOverrides.set(mapNum, [...overrides]);
     return applied;
 }
 

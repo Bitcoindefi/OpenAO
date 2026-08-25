@@ -53,9 +53,21 @@ export type SourceMeta = {
     pk: number;
 };
 
-const VB6_MAP_HEADER_SIZE = 263; // 2 bytes version + 255 bytes description + 4 bytes header padding
+const VB6_MAP_HEADER_SIZE = 261; // 2 bytes version (Int16) + 255 bytes description + 4 bytes padding (Int32) = 261 bytes
 const MAP_WIDTH = 100;
 const MAP_HEIGHT = 100;
+
+/**
+ * Safely writes a 16-bit signed integer into buffer without throwing RangeError.
+ * Legacy VB6 binary .map format strictly uses 16-bit signed integers (2 bytes per layer, 11 bytes per tile).
+ * If modern OpenAO graphic indices or triggers exceed the Int16 range (-32768..32767), they are clamped
+ * to prevent runtime crashes during legacy map exports.
+ */
+function writeSafeInt16LE(buffer: Buffer, value: number, offset: number): void {
+    const intVal = Number.isFinite(value) ? Math.trunc(value) : 0;
+    const clamped = Math.min(32767, Math.max(-32768, intVal));
+    buffer.writeInt16LE(clamped, offset);
+}
 
 /**
  * Encodes a 100x100 grid of tiles into the classic binary format (.map)
@@ -92,15 +104,15 @@ export function encodeVb6BinaryMap(tiles: LegacyTile[][], mapName = "Argentum On
 
             buffer.writeUInt8(tile.blocked ? 1 : 0, offset);
             offset += 1;
-            buffer.writeInt16LE(tile.layer1, offset);
+            writeSafeInt16LE(buffer, tile.layer1, offset);
             offset += 2;
-            buffer.writeInt16LE(tile.layer2, offset);
+            writeSafeInt16LE(buffer, tile.layer2, offset);
             offset += 2;
-            buffer.writeInt16LE(tile.layer3, offset);
+            writeSafeInt16LE(buffer, tile.layer3, offset);
             offset += 2;
-            buffer.writeInt16LE(tile.layer4, offset);
+            writeSafeInt16LE(buffer, tile.layer4, offset);
             offset += 2;
-            buffer.writeInt16LE(tile.trigger, offset);
+            writeSafeInt16LE(buffer, tile.trigger, offset);
             offset += 2;
         }
     }

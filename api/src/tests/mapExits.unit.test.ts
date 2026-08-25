@@ -111,4 +111,27 @@ describe("Map Exits CRUD & Bidirectional Pairing (OpenAO #10)", () => {
         const map2Exits = await getMapExits(TEST_MAP_2);
         expect(map2Exits.exits["80,80"]).toBeUndefined();
     });
+
+    it("should safely handle concurrent exit updates without clobbering specials.json", async () => {
+        // Execute 5 concurrent upsert operations on different coordinates of the same map
+        const tasks = Array.from({ length: 5 }, (_, i) =>
+            upsertMapExit(TEST_MAP_1, 10 + i, 20 + i, {
+                destMap: TEST_MAP_2,
+                destX: 30 + i,
+                destY: 40 + i,
+                createPaired: false,
+            })
+        );
+
+        await Promise.all(tasks);
+
+        const map1Exits = await getMapExits(TEST_MAP_1);
+        for (let i = 0; i < 5; i++) {
+            expect(map1Exits.exits[`${10 + i},${20 + i}`]).toEqual({
+                map: TEST_MAP_2,
+                x: 30 + i,
+                y: 40 + i,
+            });
+        }
+    });
 });

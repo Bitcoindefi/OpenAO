@@ -84,4 +84,27 @@ describe("Live Map Sync & Hot-Reloading", () => {
         const applied = applyMapTileOverridesToVars(999, overrides);
         assert.equal(applied, 0);
     });
+
+    it("should revert previously applied overrides when they are deleted or unpublished from DB", () => {
+        const initialOverrides: MapTileOverride[] = [
+            {
+                x: 15,
+                y: 10,
+                layer: 2,
+                grhIndex: 777,
+                blocked: true,
+                status: "published"
+            }
+        ];
+
+        applyMapTileOverridesToVars(1, initialOverrides);
+        assert.equal(vars.mapa[1][10][15].graphics[2], 777);
+
+        // Subsequent reload with empty overrides (override deleted in DB)
+        applyMapTileOverridesToVars(1, []);
+
+        // Graphic at layer 2 must be reverted/deleted, original layer 1 graphic (100) preserved
+        assert.deepEqual(vars.mapa[1][10][15].graphics, { 1: 100 });
+        assert.equal(vars.mapa[1][10][15].blocked, 1);
+    });
 });
