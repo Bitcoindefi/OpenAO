@@ -417,3 +417,101 @@ export async function clearTile(
 
     return (result.rowCount ?? 0) > 0;
 }
+
+/**
+ * Mapas principales protegidos contra edición accidental o no autorizada.
+ * Incluye las ciudades principales (Ullathorpe = 1, Nix = 34, Banderbill = 59, Lindos = 150).
+ */
+export const PROTECTED_MAPS: ReadonlySet<number> = new Set([1, 34, 59, 150]);
+
+export function isProtectedMap(mapNum: number): boolean {
+    return PROTECTED_MAPS.has(mapNum);
+}
+
+export type MapPermissionCheckResult =
+    | { allowed: true }
+    | { allowed: false; reason: string };
+
+/**
+ * Verifica si una cuenta tiene permisos para editar un mapa específico.
+ *
+ * 1. Los administradores globales pueden editar mapas no protegidos, o protegidos si envían `overrideProtected: true`.
+ * 2. Los colaboradores deben tener asignado el mapa en `game_map_permissions` y no pueden editar mapas protegidos.
+ */
+export async function checkMapEditPermission(options: {
+    accountId: string;
+    isSuperAdmin: boolean;
+    mapNum: number;
+    overrideProtected?: boolean;
+}): Promise<MapPermissionCheckResult> {
+    const { accountId, isSuperAdmin, mapNum, overrideProtected } = options;
+
+    if (isSuperAdmin) {
+        if (isProtectedMap(mapNum) && !overrideProtected) {
+            return {
+                allowed: false,
+                reason: `El mapa ${mapNum} esta protegido contra edicion accidental. Para modificarlo como admin debes especificar overrideProtected = true.`,
+            };
+        }
+        return { allowed: true };
+    }
+
+    // Colaboradores regulares: nunca pueden modificar mapas protegidos
+    if (isProtectedMap(mapNum)) {
+        return {
+            allowed: false,
+            reason: `El mapa ${mapNum} esta protegido. Los colaboradores no tienen permisos de modificacion sobre mapas protegidos.`,
+        };
+    }
+
+    // Verificar si tiene permiso granular concedido (map_num exacto o map_num = 0 para permiso global)
+    const permission = await pool.query<{ map_num: number }>(
+        `SELECT map_num FROM game_map_permissions
+         WHERE account_id = $1 AND (map_num = $2 OR map_num = 0)
+         LIMIT 1`,
+        [accountId, mapNum],
+    );
+
+    if (permission.rowCount === 0) {
+        return {
+            allowed: false,
+            reason: `La cuenta ${accountId} no tiene permisos para editar el mapa ${mapNum}.`,
+        };
+    }
+
+    return { allowed: true };
+}
+
+export async function grantMapPermission(
+    accountId: string,
+    mapNum: number,
+    grantedByAccountId: string,
+): Promise<void> {
+    await pool.query(
+        `INSERT INTO game_map_permissions (account_id, map_num, granted_by, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (account_id, map_num) DO NOTHING`,
+        [accountId, mapNum, grantedByAccountId],
+    );
+}
+
+export async function revokeMapPermission(
+    accountId: string,
+    mapNum: number,
+): Promise<boolean> {
+    const result = await pool.query(
+        `DELETE FROM game_map_permissions WHERE account_id = $1 AND map_num = $2`,
+        [accountId, mapNum],
+    );
+    return (result.rowCount ?? 0) > 0;
+}
+
+export async function listAccountMapPermissions(
+    accountId: string,
+): Promise<number[]> {
+    const result = await pool.query<{ map_num: number }>(
+        `SELECT map_num FROM game_map_permissions WHERE account_id = $1 ORDER BY map_num`,
+        [accountId],
+    );
+    return result.rows.map((row) => row.map_num);
+}
