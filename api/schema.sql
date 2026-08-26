@@ -627,3 +627,30 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_overrides_map
     ON game_map_tile_overrides(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+-- Permisos granulares de edicion de mapa por cuenta.
+-- map_num = 0 indica permiso de edicion global sobre mapas no protegidos.
+CREATE TABLE IF NOT EXISTS game_map_permissions (
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    map_num INTEGER NOT NULL CHECK (map_num >= 0),
+    granted_by UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (account_id, map_num)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_permissions_account_map
+    ON game_map_permissions(account_id, map_num);
+
+-- Entradas de paleta dinamicas por mapa (permite asignar graficos subidos a tiles reusables).
+CREATE TABLE IF NOT EXISTS game_map_palette_overrides (
+    map_num INTEGER NOT NULL CHECK (map_num > 0),
+    palette_id INTEGER NOT NULL CHECK (palette_id > 0),
+    graphics INTEGER[] NOT NULL,
+    blocked BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (map_num, palette_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_palette_overrides_map
+    ON game_map_palette_overrides(map_num);

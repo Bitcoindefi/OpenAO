@@ -101,30 +101,45 @@ function buildPasswordResetText({ displayName, resetUrl }: PasswordResetEmailInp
 }
 
 export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<void> {
-  const client = getSesClient();
+  let client: SESv2Client;
+  try {
+    client = getSesClient();
+  } catch (configError) {
+    console.error("[Email/SES] Error de configuracion al intentar enviar email de recuperacion:", configError);
+    throw new Error("No se pudo enviar el email de recuperacion. Intenta de nuevo.");
+  }
 
-  await client.send(new SendEmailCommand({
-    FromEmailAddress: `${config.sesFromName} <${config.sesFromEmail}>`,
-    Destination: {
-      ToAddresses: [input.to],
-    },
-    Content: {
-      Simple: {
-        Subject: {
-          Data: "AOWeb | Recuperacion de contraseña",
-          Charset: "UTF-8",
-        },
-        Body: {
-          Html: {
-            Data: buildPasswordResetHtml(input),
+  try {
+    await client.send(new SendEmailCommand({
+      FromEmailAddress: `${config.sesFromName} <${config.sesFromEmail}>`,
+      Destination: {
+        ToAddresses: [input.to],
+      },
+      Content: {
+        Simple: {
+          Subject: {
+            Data: "AOWeb | Recuperacion de contraseña",
             Charset: "UTF-8",
           },
-          Text: {
-            Data: buildPasswordResetText(input),
-            Charset: "UTF-8",
+          Body: {
+            Html: {
+              Data: buildPasswordResetHtml(input),
+              Charset: "UTF-8",
+            },
+            Text: {
+              Data: buildPasswordResetText(input),
+              Charset: "UTF-8",
+            },
           },
         },
       },
-    },
-  }));
+    }));
+  } catch (awsError: any) {
+    console.error(`[Email/SES] Error de envio AWS SES al destinatario ${input.to}:`, {
+      name: awsError?.name,
+      message: awsError?.message,
+      code: awsError?.code || awsError?.$metadata?.httpStatusCode,
+    });
+    throw new Error("No se pudo enviar el email de recuperacion. Intenta de nuevo.");
+  }
 }

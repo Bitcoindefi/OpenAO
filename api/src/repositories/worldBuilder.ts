@@ -417,3 +417,280 @@ export async function clearTile(
 
     return (result.rowCount ?? 0) > 0;
 }
+
+/**
+ * Mapas principales protegidos contra edición accidental o no autorizada.
+ * Incluye las ciudades principales (Ullathorpe = 1, Nix = 34, Banderbill = 59, Lindos = 150).
+ */
+export const PROTECTED_MAPS: ReadonlySet<number> = new Set([1, 34, 59, 150]);
+
+export function isProtectedMap(mapNum: number): boolean {
+    return PROTECTED_MAPS.has(mapNum);
+}
+
+export type MapPermissionCheckResult =
+    | { allowed: true }
+    | { allowed: false; reason: string };
+
+/**
+ * Verifica si una cuenta tiene permisos para editar un mapa específico.
+ *
+ * 1. Los administradores globales pueden editar mapas no protegidos, o protegidos si envían `overrideProtected: true`.
+ * 2. Los colaboradores deben tener asignado el mapa en `game_map_permissions` y no pueden editar mapas protegidos.
+ */
+export async function checkMapEditPermission(options: {
+    accountId: string;
+    isSuperAdmin: boolean;
+    mapNum: number;
+    overrideProtected?: boolean;
+}): Promise<MapPermissionCheckResult> {
+    const { accountId, isSuperAdmin, mapNum, overrideProtected } = options;
+
+    if (isSuperAdmin) {
+        if (isProtectedMap(mapNum) && !overrideProtected) {
+            return {
+                allowed: false,
+                reason: `El mapa ${mapNum} esta protegido contra edicion accidental. Para modificarlo como admin debes especificar overrideProtected = true.`,
+            };
+        }
+        return { allowed: true };
+    }
+
+    // Colaboradores regulares: nunca pueden modificar mapas protegidos
+    if (isProtectedMap(mapNum)) {
+        return {
+            allowed: false,
+            reason: `El mapa ${mapNum} esta protegido. Los colaboradores no tienen permisos de modificacion sobre mapas protegidos.`,
+        };
+    }
+
+    // Verificar si tiene permiso granular concedido (map_num exacto o map_num = 0 para permiso global)
+    const permission = await pool.query<{ map_num: number }>(
+        `SELECT map_num FROM game_map_permissions
+         WHERE account_id = $1 AND (map_num = $2 OR map_num = 0)
+         LIMIT 1`,
+        [accountId, mapNum],
+    );
+
+    if (permission.rowCount === 0) {
+        return {
+            allowed: false,
+            reason: `La cuenta ${accountId} no tiene permisos para editar el mapa ${mapNum}.`,
+        };
+    }
+
+    return { allowed: true };
+}
+
+export async function grantMapPermission(
+    accountId: string,
+    mapNum: number,
+    grantedByAccountId: string,
+): Promise<void> {
+    await pool.query(
+        `INSERT INTO game_map_permissions (account_id, map_num, granted_by, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (account_id, map_num) DO NOTHING`,
+        [accountId, mapNum, grantedByAccountId],
+    );
+}
+
+export async function revokeMapPermission(
+    accountId: string,
+    mapNum: number,
+): Promise<boolean> {
+    const result = await pool.query(
+        `DELETE FROM game_map_permissions WHERE account_id = $1 AND map_num = $2`,
+        [accountId, mapNum],
+    );
+    return (result.rowCount ?? 0) > 0;
+}
+
+export async function listAccountMapPermissions(
+    accountId: string,
+): Promise<number[]> {
+    const result = await pool.query<{ map_num: number }>(
+        `SELECT map_num FROM game_map_permissions WHERE account_id = $1 ORDER BY map_num`,
+        [accountId],
+    );
+    return result.rows.map((row) => row.map_num);
+}
+
+export type GraphicMetadata = {
+    grhIndex: number;
+    width: number;
+    height: number;
+    frameCount: number;
+    fileNum: number;
+    offX: number;
+    offY: number;
+    isUploaded: boolean;
+    url: string;
+};
+
+export async function getGraphicMetadata(
+    grhIndex: number,
+): Promise<GraphicMetadata | null> {
+    if (grhIndex >= UPLOADED_GRAPHIC_INDEX_START) {
+        const result = await pool.query<{
+            grh_index: number;
+            width: number;
+            height: number;
+        }>(
+            `SELECT grh_index, width, height FROM game_uploaded_graphics WHERE grh_index = $1 LIMIT 1`,
+            [grhIndex],
+        );
+        const row = result.rows[0];
+        if (!row) return null;
+
+        return {
+            grhIndex: row.grh_index,
+            width: row.width,
+            height: row.height,
+            frameCount: 1,
+            fileNum: row.grh_index,
+            offX: 0,
+            offY: 0,
+            isUploaded: true,
+            url: `/admin/game-data/graphics/${row.grh_index}`,
+        };
+    }
+
+    // Gráfico original del juego
+    return {
+        grhIndex,
+        width: 32,
+        height: 32,
+        frameCount: 1,
+        fileNum: grhIndex,
+        offX: 0,
+        offY: 0,
+        isUploaded: false,
+        url: `/graphics/${grhIndex}.png`,
+    };
+}
+
+export const paletteEntrySchema = z.object({
+    paletteId: z.number().int().positive().optional(),
+    graphics: z.array(z.number().int().positive().nullable()).min(1).max(4),
+    blocked: z.boolean().default(false),
+});
+
+export type PaletteEntryInput = z.infer<typeof paletteEntrySchema>;
+
+export type PaletteEntry = {
+    paletteId: number;
+    graphics: (number | null)[];
+    blocked: boolean;
+    updatedAt: string;
+};
+
+/**
+ * Agrega o actualiza una entrada en la paleta de un mapa.
+ * Valida que todos los gráficos referenciados existan en la base o catálogo base.
+ */
+export async function upsertPaletteEntry(
+    mapNum: number,
+    entry: PaletteEntryInput,
+    accountId: string,
+): Promise<PaletteEntry> {
+    // Validar existencia de cada grafico referenciado
+    for (let i = 0; i < entry.graphics.length; i++) {
+        const grh = entry.graphics[i];
+        if (grh != null) {
+            if (grh >= UPLOADED_GRAPHIC_INDEX_START) {
+                const exists = await pool.query(
+                    `SELECT 1 FROM game_uploaded_graphics WHERE grh_index = $1 LIMIT 1`,
+                    [grh],
+                );
+                if (exists.rowCount === 0) {
+                    throw new Error(
+                        `El grafico ${grh} no existe en la base de assets. Subilo antes de asignarlo a la paleta.`,
+                    );
+                }
+            } else if (grh <= 0 || grh > 320151) {
+                throw new Error(
+                    `El indice de grafico ${grh} esta fuera de rango (1..320151).`,
+                );
+            }
+        }
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query("BEGIN");
+
+        let paletteId = entry.paletteId;
+
+        if (!paletteId) {
+            await client.query(
+                "LOCK TABLE game_map_palette_overrides IN SHARE ROW EXCLUSIVE MODE",
+            );
+            const nextIdResult = await client.query<{ next_id: number }>(
+                `SELECT COALESCE(MAX(palette_id), 1000) + 1 AS next_id
+                 FROM game_map_palette_overrides
+                 WHERE map_num = $1`,
+                [mapNum],
+            );
+            paletteId = Number(nextIdResult.rows[0]?.next_id ?? 1001);
+        }
+
+        const graphicsArray = entry.graphics.map((g) => (g == null ? 0 : g));
+
+        const result = await client.query<{
+            palette_id: number;
+            graphics: number[];
+            blocked: boolean;
+            updated_at: Date;
+        }>(
+            `INSERT INTO game_map_palette_overrides
+                 (map_num, palette_id, graphics, blocked, updated_by_account_id, updated_at)
+             VALUES ($1, $2, $3, $4, $5, NOW())
+             ON CONFLICT (map_num, palette_id) DO UPDATE
+             SET graphics = EXCLUDED.graphics,
+                 blocked = EXCLUDED.blocked,
+                 updated_by_account_id = EXCLUDED.updated_by_account_id,
+                 updated_at = NOW()
+             RETURNING palette_id, graphics, blocked, updated_at`,
+            [mapNum, paletteId, graphicsArray, entry.blocked ?? false, accountId],
+        );
+
+        await client.query("COMMIT");
+
+        const row = result.rows[0];
+        return {
+            paletteId: row.palette_id,
+            graphics: row.graphics.map((g) => (g === 0 ? null : g)),
+            blocked: row.blocked,
+            updatedAt: row.updated_at.toISOString(),
+        };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export async function listMapPalette(mapNum: number): Promise<PaletteEntry[]> {
+    const result = await pool.query<{
+        palette_id: number;
+        graphics: number[];
+        blocked: boolean;
+        updated_at: Date;
+    }>(
+        `SELECT palette_id, graphics, blocked, updated_at
+         FROM game_map_palette_overrides
+         WHERE map_num = $1
+         ORDER BY palette_id ASC`,
+        [mapNum],
+    );
+
+    return result.rows.map((row) => ({
+        paletteId: row.palette_id,
+        graphics: row.graphics.map((g) => (g === 0 ? null : g)),
+        blocked: row.blocked,
+        updatedAt: row.updated_at.toISOString(),
+    }));
+}

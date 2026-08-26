@@ -700,7 +700,7 @@ function processIdleCharactersTick(now: number) {
         return;
     }
 
-    const penalizedClientIds = getDuplicateIpIdlePenalizedClientIds();
+    const penalizedClientIds = getDuplicateAccountIdlePenalizedClientIds();
 
     for (const idUser in vars.clients) {
         const client = vars.clients[idUser] as RuntimeClient | undefined;
@@ -725,9 +725,9 @@ function processIdleCharactersTick(now: number) {
             continue;
         }
 
-        const isDuplicateIpScout = penalizedClientIds.has(idUser);
-        const effectiveIdleTimeoutMs = isDuplicateIpScout ? DUPLICATE_IP_IDLE_TIMEOUT_MS : idleCharacterTimeoutMs;
-        const idleReferenceAt = isDuplicateIpScout
+        const isDuplicateAccountScout = penalizedClientIds.has(idUser);
+        const effectiveIdleTimeoutMs = isDuplicateAccountScout ? DUPLICATE_IP_IDLE_TIMEOUT_MS : idleCharacterTimeoutMs;
+        const idleReferenceAt = isDuplicateAccountScout
             ? getScoutIdleReferenceAt(client, user)
             : Number(client.lastActivityAt ?? now);
 
@@ -758,9 +758,9 @@ function getScoutIdleReferenceAt(client: RuntimeClient, user: ServerCharacter): 
     return Number(client.connectedAt ?? Date.now());
 }
 
-function getDuplicateIpIdlePenalizedClientIds(): Set<string> {
+function getDuplicateAccountIdlePenalizedClientIds(): Set<string> {
     const penalizedClientIds = new Set<string>();
-    const clientsByIp = new Map<
+    const clientsByAccount = new Map<
         string,
         {
             idUser: string;
@@ -777,34 +777,37 @@ function getDuplicateIpIdlePenalizedClientIds(): Set<string> {
             continue;
         }
 
-        const clientIp = socket.getIp(client);
+        // Agrupar por cuenta de usuario en lugar de IP para evitar que jugadores
+        // de redes móviles (CGNAT) se desconecten entre sí compartiendo IP pública.
+        const accountKey =
+            (user as any).idAccount ||
+            (user as any).account_id ||
+            (client as any).accountId ||
+            socket.getIp(client) ||
+            idUser;
 
-        if (!clientIp) {
-            continue;
-        }
+        const clientsForAccount = clientsByAccount.get(accountKey) ?? [];
 
-        const clientsForIp = clientsByIp.get(clientIp) ?? [];
-
-        clientsForIp.push({
+        clientsForAccount.push({
             idUser,
             connectedAt: Number(client.connectedAt ?? 0),
             miningActive: Boolean(user.harvesting?.active && user.harvesting?.skill === "mining"),
         });
-        clientsByIp.set(clientIp, clientsForIp);
+        clientsByAccount.set(accountKey, clientsForAccount);
     }
 
-    for (const clientsForIp of clientsByIp.values()) {
-        if (clientsForIp.length < 2) {
+    for (const clientsForAccount of clientsByAccount.values()) {
+        if (clientsForAccount.length < 2) {
             continue;
         }
 
-        const hasActiveMiner = clientsForIp.some((entry) => entry.miningActive);
+        const hasActiveMiner = clientsForAccount.some((entry) => entry.miningActive);
 
         if (!hasActiveMiner) {
             continue;
         }
 
-        for (const entry of clientsForIp) {
+        for (const entry of clientsForAccount) {
             if (!entry.miningActive) {
                 penalizedClientIds.add(entry.idUser);
             }
@@ -949,3 +952,76 @@ createDynamicScheduler(
 );
 
 void saveOnlineStatsSnapshot();
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+    if (isShuttingDown) {
+        return;
+    }
+    isShuttingDown = true;
+    console.log(`[Servidor] Recibida señal ${signal}. Iniciando apagado ordenado...`);
+
+    // Timeout de seguridad: si la API no responde, no bloquear el apagado
+    const forceExitTimeout = setTimeout(() => {
+        console.error("[Servidor] Timeout de apagado ordenado excedido. Forzando salida.");
+        process.exit(1);
+    }, 5000);
+    forceExitTimeout.unref();
+
+    vars.serverReady = false;
+
+    // 1. Notificar a los clientes conectados y cerrar sus sockets ordenadamente
+    try {
+        for (const idUser in vars.clients) {
+            const client = vars.clients[idUser] as RuntimeClient | undefined;
+            if (client && client.readyState === client.OPEN) {
+                try {
+                    client.close(1000, "Servidor reiniciando. Por favor vuelve a conectar en unos momentos.");
+                } catch {
+                    // Ignorar errores individuales al cerrar socket
+                }
+            }
+        }
+    } catch (error) {
+        console.error("[Servidor] Error al notificar clientes durante apagado:", error);
+    }
+
+    // 2. Cerrar servidor WebSocket
+    try {
+        if (wsServer) {
+            wsServer.close();
+        }
+    } catch (error) {
+        console.error("[Servidor] Error al cerrar wsServer:", error);
+    }
+
+    // 3. Llamar a la API para desmarcar a todos los personajes conectados
+    try {
+        let timeoutId: NodeJS.Timeout | undefined;
+        const timeoutPromise = new Promise<{ updated: number }>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error("API timeout")), 3500);
+            timeoutId.unref();
+        });
+
+        const fetchPromise = funct.fetchUrl("/internal/characters/reset-connected", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: vars.tokenAuth,
+            },
+        }) as Promise<{ updated: number }>;
+
+        const response = await Promise.race([fetchPromise, timeoutPromise]);
+        console.log(`[Servidor] Personajes marcados como desconectados al apagar: ${response?.updated ?? 0}.`);
+    } catch (error) {
+        console.error("[Servidor] No se pudo desmarcar personajes durante el apagado:", error);
+    }
+
+    console.log("[Servidor] Apagado ordenado completado exitosamente.");
+    process.exit(0);
+}
+
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+
