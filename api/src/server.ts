@@ -96,17 +96,29 @@ import {
     upsertGameBalance,
 } from "./repositories/gameBalance";
 import {
+    checkMapEditPermission,
     clearTile,
     discardDrafts,
     getGraphicContent,
+    getGraphicMetadata,
+    getMapRegion,
     getMapStatus,
+    grantMapPermission,
+    isProtectedMap,
+    listAccountMapPermissions,
     listGraphics,
     listMapOverrides,
+    listMapPalette,
+    paintRectangle,
+    paintRectangleSchema,
     paintTiles,
     paintTilesSchema,
+    paletteEntrySchema,
     publishMap,
     revertMap,
+    revokeMapPermission,
     uploadGraphic,
+    upsertPaletteEntry,
 } from "./repositories/worldBuilder";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
@@ -231,6 +243,46 @@ async function requireAdminEmailSession(
     }
 
     return authorized;
+}
+
+async function requireMapEditSession(
+    request: express.Request,
+    response: express.Response,
+    mapNum: number,
+    overrideProtected = false,
+): Promise<{ accountId: string; isSuperAdmin: boolean } | null> {
+    if (
+        !config.gameDataAdminProxyToken ||
+        getGameDataAdminProxyHeader(request) !== config.gameDataAdminProxyToken
+    ) {
+        response.status(403).json({ error: "No autorizado." });
+        return null;
+    }
+
+    const authorized = await getAuthorizedSession(request);
+
+    if (!authorized) {
+        response.status(401).json({ error: "Unauthorized" });
+        return null;
+    }
+
+    const isSuperAdmin = isAuthorizedGameDataAdmin(authorized.session);
+    const permission = await checkMapEditPermission({
+        accountId: authorized.session.account._id,
+        isSuperAdmin,
+        mapNum,
+        overrideProtected,
+    });
+
+    if (!permission.allowed) {
+        response.status(403).json({ error: permission.reason });
+        return null;
+    }
+
+    return {
+        accountId: authorized.session.account._id,
+        isSuperAdmin,
+    };
 }
 
 async function ensurePgStatStatements(): Promise<void> {
@@ -845,17 +897,109 @@ app.get("/game-data/graphics/:grhIndex.png", async (request, response) => {
     }
 });
 
-app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
+/** Devuelve la metadata de resolución de un gráfico para el motor cliente. */
+app.get("/graphics/:grhIndex/metadata", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
-        if (!authorized) return;
+        const grhIndex = Number.parseInt(request.params.grhIndex ?? "", 10);
 
+        if (!Number.isInteger(grhIndex) || grhIndex <= 0) {
+            response.status(400).json({ error: "Indice invalido." });
+            return;
+        }
+
+        const metadata = await getGraphicMetadata(grhIndex);
+        if (!metadata) {
+            response.status(404).json({ error: "Grafico no encontrado." });
+            return;
+        }
+
+        response.json(metadata);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Agrega o actualiza una entrada en la paleta del mapa. */
+app.put("/admin/game-data/maps/:mapNum/palette", async (request, response) => {
+    try {
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
         if (!Number.isInteger(mapNum) || mapNum <= 0) {
             response.status(400).json({ error: "Numero de mapa invalido." });
             return;
         }
+
+        const overrideProtected = Boolean(request.body?.overrideProtected);
+        const authorized = await requireMapEditSession(
+            request,
+            response,
+            mapNum,
+            overrideProtected,
+        );
+        if (!authorized) return;
+
+        const parsed = paletteEntrySchema.safeParse(request.body);
+        if (!parsed.success) {
+            response
+                .status(400)
+                .json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+
+        const result = await upsertPaletteEntry(
+            mapNum,
+            parsed.data,
+            authorized.accountId,
+        );
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Lista las entradas de paleta dinámicas registradas para un mapa. */
+app.get("/admin/game-data/maps/:mapNum/palette", async (request, response) => {
+    try {
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const authorized = await requireMapEditSession(request, response, mapNum);
+        if (!authorized) return;
+
+        const palette = await listMapPalette(mapNum);
+        response.json({ mapNum, palette });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
+    try {
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const overrideProtected = Boolean(request.body?.overrideProtected);
+        const authorized = await requireMapEditSession(
+            request,
+            response,
+            mapNum,
+            overrideProtected,
+        );
+        if (!authorized) return;
 
         const parsed = paintTilesSchema.safeParse(request.body);
 
@@ -870,9 +1014,81 @@ app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
             await paintTiles(
                 mapNum,
                 parsed.data.tiles,
-                authorized.session.account._id,
+                authorized.accountId,
             ),
         );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.put("/admin/game-data/maps/:mapNum/rectangle", async (request, response) => {
+    try {
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const overrideProtected = Boolean(request.body?.overrideProtected);
+        const authorized = await requireMapEditSession(
+            request,
+            response,
+            mapNum,
+            overrideProtected,
+        );
+        if (!authorized) return;
+
+        const parsed = paintRectangleSchema.safeParse(request.body);
+
+        if (!parsed.success) {
+            response
+                .status(400)
+                .json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+
+        const result = await paintRectangle(
+            mapNum,
+            parsed.data,
+            authorized.accountId,
+        );
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.get("/admin/game-data/maps/:mapNum/region", async (request, response) => {
+    try {
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const authorized = await requireMapEditSession(request, response, mapNum);
+        if (!authorized) return;
+
+        const parseCoord = (val: unknown, defaultVal: number): number => {
+            const parsed = Number.parseInt(String(val ?? ""), 10);
+            if (!Number.isInteger(parsed)) return defaultVal;
+            return Math.max(1, Math.min(100, parsed));
+        };
+
+        const fromX = parseCoord(request.query.fromX, 1);
+        const fromY = parseCoord(request.query.fromY, 1);
+        const toX = parseCoord(request.query.toX, 100);
+        const toY = parseCoord(request.query.toY, 100);
+
+        const region = await getMapRegion(mapNum, fromX, fromY, toX, toY, true);
+        response.json(region);
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -884,12 +1100,6 @@ app.delete(
     "/admin/game-data/maps/:mapNum/tiles/:x/:y/:layer",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
-                request,
-                response,
-            );
-            if (!authorized) return;
-
             const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
             const x = Number.parseInt(request.params.x ?? "", 10);
             const y = Number.parseInt(request.params.y ?? "", 10);
@@ -899,6 +1109,18 @@ app.delete(
                 response.status(400).json({ error: "Parametros invalidos." });
                 return;
             }
+
+            const overrideProtected = Boolean(
+                request.query?.overrideProtected === "true" ||
+                    request.body?.overrideProtected,
+            );
+            const authorized = await requireMapEditSession(
+                request,
+                response,
+                mapNum,
+                overrideProtected,
+            );
+            if (!authorized) return;
 
             response.json({ removed: await clearTile(mapNum, x, y, layer) });
         } catch (error) {
@@ -953,9 +1175,6 @@ app.get("/maps/:mapNum/overrides", async (request, response) => {
 /** Publica los borradores de un mapa. A partir de aca los ven los jugadores. */
 app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
-        if (!authorized) return;
-
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
         if (!Number.isInteger(mapNum) || mapNum <= 0) {
@@ -963,8 +1182,17 @@ app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
             return;
         }
 
+        const overrideProtected = Boolean(request.body?.overrideProtected);
+        const authorized = await requireMapEditSession(
+            request,
+            response,
+            mapNum,
+            overrideProtected,
+        );
+        if (!authorized) return;
+
         response.json(
-            await publishMap(mapNum, authorized.session.account._id),
+            await publishMap(mapNum, authorized.accountId),
         );
     } catch (error) {
         const message =
@@ -976,15 +1204,21 @@ app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
 /** Descarta los borradores sin tocar lo ya publicado. */
 app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
-        if (!authorized) return;
-
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
         if (!Number.isInteger(mapNum) || mapNum <= 0) {
             response.status(400).json({ error: "Numero de mapa invalido." });
             return;
         }
+
+        const overrideProtected = Boolean(request.body?.overrideProtected);
+        const authorized = await requireMapEditSession(
+            request,
+            response,
+            mapNum,
+            overrideProtected,
+        );
+        if (!authorized) return;
 
         response.json(await discardDrafts(mapNum));
     } catch (error) {
@@ -1000,15 +1234,21 @@ app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
  */
 app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
-        if (!authorized) return;
-
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
         if (!Number.isInteger(mapNum) || mapNum <= 0) {
             response.status(400).json({ error: "Numero de mapa invalido." });
             return;
         }
+
+        const overrideProtected = Boolean(request.body?.overrideProtected);
+        const authorized = await requireMapEditSession(
+            request,
+            response,
+            mapNum,
+            overrideProtected,
+        );
+        if (!authorized) return;
 
         response.json(await revertMap(mapNum));
     } catch (error) {
@@ -1017,6 +1257,95 @@ app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
         response.status(400).json({ error: message });
     }
 });
+
+/** Concede permisos de edicion de mapa a una cuenta (superadmin). */
+app.post(
+    "/admin/game-data/maps/:mapNum/permissions/:accountId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const accountId = request.params.accountId ?? "";
+
+            if (!Number.isInteger(mapNum) || mapNum < 0 || !accountId) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+
+            await grantMapPermission(
+                accountId,
+                mapNum,
+                authorized.session.account._id,
+            );
+            response.json({ ok: true, accountId, mapNum });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Revoca permisos de edicion de mapa a una cuenta (superadmin). */
+app.delete(
+    "/admin/game-data/maps/:mapNum/permissions/:accountId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const accountId = request.params.accountId ?? "";
+
+            if (!Number.isInteger(mapNum) || mapNum < 0 || !accountId) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+
+            const revoked = await revokeMapPermission(accountId, mapNum);
+            response.json({ ok: true, revoked });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Lista los mapas asignados a una cuenta. */
+app.get(
+    "/admin/game-data/maps/permissions/:accountId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const accountId = request.params.accountId ?? "";
+            if (!accountId) {
+                response.status(400).json({ error: "accountId requerido." });
+                return;
+            }
+
+            const maps = await listAccountMapPermissions(accountId);
+            response.json({ accountId, maps });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
 
 /** Cuantos tiles hay en borrador y cuantos publicados. */
 app.get("/admin/game-data/maps/:mapNum/status", async (request, response) => {
