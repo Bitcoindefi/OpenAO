@@ -1,0 +1,110 @@
+{
+  "1": {
+    "name": "Comerciante de Pociones",
+    "npcType": 10,
+    "idHead": 1,
+    "idBody": 1,
+    "movement": 0,
+    "desc": "Vende pociones curativas, de maná y consumibles básicos.",
+    "objs": [
+      {
+        "item": 1,
+        "cant": 1000
+      },
+      {
+        "item": 2,
+        "cant": 1000
+      },
+      {
+        "item": 3,
+        "cant": 1000
+      }
+    ],
+    "drop": []
+  },
+  "2": {
+    "name": "Herrero de Ullathorpe",
+    "npcType": 10,
+    "idHead": 2,
+    "idBody": 2,
+    "movement": 0,
+    "desc": "Vende armas de hierro y armaduras de combate.",
+    "objs": [
+      {
+        "item": 10,
+        "cant": 100
+      },
+      {
+        "item": 11,
+        "cant": 100
+      },
+      {
+        "item": 12,
+        "cant": 100
+      }
+    ],
+    "drop": []
+  },
+  "3": {
+    "name": "Sacerdote",
+    "npcType": 11,
+    "idHead": 3,
+    "idBody": 3,
+    "movement": 0,
+    "desc": "Cura heridas y bendice a los aventureros.",
+    "objs": [],
+    "drop": []
+  },
+  "4": {
+    "name": "Banquero",
+    "npcType": 12,
+    "idHead": 1,
+    "idBody": 1,
+    "movement": 0,
+    "desc": "Custodia el oro y los objetos de los aventureros.",
+    "objs": [],
+    "drop": []
+  },
+  "5": {
+    "name": "Lobo",
+    "npcType": 1,
+    "idHead": 0,
+    "idBody": 10,
+    "movement": 1,
+    "exp": 15,
+    "gold": 25,
+    "hp": 30,
+    "maxHp": 30,
+    "minHit": 2,
+    "maxHit": 6,
+    "def": 2,
+    "objs": [],
+    "drop": [
+      {
+        "item": 101,
+        "cant": 1
+      }
+    ]
+  },
+  "6": {
+    "name": "Orco Guerrero",
+    "npcType": 1,
+    "idHead": 4,
+    "idBody": 20,
+    "movement": 1,
+    "exp": 60,
+    "gold": 90,
+    "hp": 85,
+    "maxHp": 85,
+    "minHit": 8,
+    "maxHit": 16,
+    "def": 6,
+    "objs": [],
+    "drop": [
+      {
+        "item": 102,
+        "cant": 1
+      }
+    ]
+  }
+}
