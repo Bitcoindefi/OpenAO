@@ -9,6 +9,32 @@ on:
       - main
 
 jobs:
+  protocol:
+    name: Protocol (typecheck, build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build protocol
+        run: pnpm --filter @openao/protocol run build
+
   api:
     name: API (typecheck, test, build)
     runs-on: ubuntu-latest
@@ -42,26 +68,22 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: api/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: api
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        working-directory: api
-        run: pnpm exec tsc --noEmit
+        run: pnpm --filter argentumonlineweb-api exec tsc --noEmit
 
       - name: Run migrations / schema
-        working-directory: api
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aoweb
           TOKEN_AUTH: test-token-secret
         run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -d aoweb -f schema.sql
+          PGPASSWORD=postgres psql -h localhost -U postgres -d aoweb -f api/schema.sql
 
       - name: Start API for integration tests
-        working-directory: api
         env:
           PORT: 3001
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aoweb
@@ -69,7 +91,7 @@ jobs:
           NODE_ENV: test
           CORS_ORIGIN: "http://localhost:3000"
         run: |
-          pnpm exec tsx src/server.ts &
+          pnpm --filter argentumonlineweb-api exec tsx src/server.ts &
           for i in {1..30}; do
             if curl -s http://localhost:3001/health | grep -q ok:true; then
               echo "API is healthy"
@@ -80,21 +102,20 @@ jobs:
           done
 
       - name: Run tests
-        working-directory: api
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aoweb
           TOKEN_AUTH: test-token-secret
           API_TEST_URL: http://127.0.0.1:3001
           API_TEST_AUTH: test-token-secret
-        run: pnpm test
+        run: pnpm --filter argentumonlineweb-api test
 
       - name: Build API
-        working-directory: api
-        run: pnpm run build
+        run: pnpm --filter argentumonlineweb-api run build
 
   server:
     name: Server (typecheck, lint, build)
     runs-on: ubuntu-latest
+    needs: protocol
 
     steps:
       - name: Checkout
@@ -110,27 +131,27 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: server/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: server
         run: pnpm install --frozen-lockfile
 
+      - name: Build protocol
+        run: pnpm --filter @openao/protocol run build
+
       - name: Lint
-        working-directory: server
-        run: pnpm run lint
+        run: pnpm --filter argentumonlineweb_server run lint
 
       - name: Typecheck
-        working-directory: server
-        run: pnpm exec tsc --noEmit
+        run: pnpm --filter argentumonlineweb_server exec tsc --noEmit
 
       - name: Build
-        working-directory: server
-        run: pnpm run build
+        run: pnpm --filter argentumonlineweb_server run build
 
   frontend:
     name: Frontend (typecheck, lint, build)
     runs-on: ubuntu-latest
+    needs: protocol
 
     steps:
       - name: Checkout
@@ -146,25 +167,24 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: frontend
         run: pnpm install --frozen-lockfile
 
+      - name: Build protocol
+        run: pnpm --filter @openao/protocol run build
+
       - name: Lint
-        working-directory: frontend
-        run: pnpm run lint
+        run: pnpm --filter falopita run lint
 
       - name: Typecheck
-        working-directory: frontend
-        run: pnpm exec tsc --noEmit
+        run: pnpm --filter falopita exec tsc --noEmit
 
       - name: Build
-        working-directory: frontend
         env:
           NEXT_PUBLIC_AOWEB_TEST_MODE: "true"
-        run: pnpm run build
+        run: pnpm --filter falopita run build
 
   docker-build:
     name: Docker build checks

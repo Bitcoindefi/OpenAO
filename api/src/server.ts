@@ -100,6 +100,7 @@ import {
     discardDrafts,
     getGraphicContent,
     getMapStatus,
+    listAllPublishedMapOverrides,
     listGraphics,
     listMapOverrides,
     paintTiles,
@@ -108,6 +109,12 @@ import {
     revertMap,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import {
+    getMapExits,
+    upsertMapExit,
+    deleteMapExit,
+    upsertExitSchema,
+} from "./repositories/mapExits";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -1039,6 +1046,89 @@ app.get("/admin/game-data/maps/:mapNum/status", async (request, response) => {
     }
 });
 
+/** Obtiene todos los exits configurados en el mapa. */
+app.get("/admin/game-data/maps/:mapNum/exits", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json(await getMapExits(mapNum));
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Crea o actualiza un exit en el mapa con soporte opcional para enlaces bidireccionales. */
+app.put("/admin/game-data/maps/:mapNum/exits/:x/:y", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const x = Number.parseInt(request.params.x ?? "", 10);
+        const y = Number.parseInt(request.params.y ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        if (!Number.isInteger(x) || x < 1 || x > 100 || !Number.isInteger(y) || y < 1 || y > 100) {
+            response.status(400).json({ error: "Coordenadas (x, y) invalidas. Rango permitido: 1-100." });
+            return;
+        }
+
+        const parsed = upsertExitSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: "Payload invalido", details: parsed.error.issues });
+            return;
+        }
+
+        const result = await upsertMapExit(mapNum, x, y, parsed.data);
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Elimina un exit del mapa con soporte opcional para borrar su contraparte enlazada. */
+app.delete("/admin/game-data/maps/:mapNum/exits/:x/:y", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const x = Number.parseInt(request.params.x ?? "", 10);
+        const y = Number.parseInt(request.params.y ?? "", 10);
+
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        if (!Number.isInteger(x) || x < 1 || x > 100 || !Number.isInteger(y) || y < 1 || y > 100) {
+            response.status(400).json({ error: "Coordenadas (x, y) invalidas." });
+            return;
+        }
+
+        const deletePaired = request.query.deletePaired === "true" || request.query.deletePaired === "1";
+        const result = await deleteMapExit(mapNum, x, y, deletePaired);
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
 app.get(
     "/internal/game-data/objects",
     requireAuth,
@@ -1468,6 +1558,42 @@ app.put(
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
             response.status(400).json({ error: message });
+        }
+    },
+);
+
+app.get(
+    "/internal/game-data/maps",
+    requireAuth,
+    async (request, response) => {
+        try {
+            response.json(await listAllPublishedMapOverrides());
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(500).json({ error: message });
+        }
+    },
+);
+
+app.get(
+    "/internal/game-data/maps/:mapNum/overrides",
+    requireAuth,
+    async (request, response) => {
+        try {
+            const rawMapNum = Array.isArray(request.params.mapNum)
+                ? request.params.mapNum[0]
+                : request.params.mapNum;
+            const mapNum = Number.parseInt(rawMapNum ?? "", 10);
+            if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                return void response.status(400).json({ error: "mapNum invalido" });
+            }
+            const overrides = await listMapOverrides(mapNum, false);
+            response.json({ mapNum, overrides });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(500).json({ error: message });
         }
     },
 );
