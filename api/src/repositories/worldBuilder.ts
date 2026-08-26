@@ -417,3 +417,21 @@ export async function clearTile(
 
     return (result.rowCount ?? 0) > 0;
 }
+
+export async function clearTileRange(
+    mapNum: number,
+    xMin: number,
+    xMax: number,
+    yMin: number,
+    yMax: number,
+    layer?: number,
+): Promise<number> {
+    const query = typeof layer === "number"
+        ? `DELETE FROM game_map_tile_overrides
+           WHERE map_num = $1 AND x >= $2 AND x <= $3 AND y >= $4 AND y <= $5 AND layer = $6 AND status = 'draft'`
+        : `DELETE FROM game_map_tile_overrides
+           WHERE map_num = $1 AND x >= $2 AND x <= $3 AND y >= $4 AND y <= $5 AND status = 'draft'`;
+    const params = typeof layer === "number" ? [mapNum, xMin, xMax, yMin, yMax, layer] : [mapNum, xMin, xMax, yMin, yMax];
+    const result = await pool.query(query, params);
+    return result.rowCount ?? 0;
+}
