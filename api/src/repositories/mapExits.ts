@@ -22,6 +22,28 @@ const MAPS_SOURCE_DIR = process.env.MAPS_SOURCE_DIR || path.resolve(__dirname, "
 
 const mapWriteLocks = new Map<number, Promise<unknown>>();
 
+type MapLockSelectionChangedError = Error & {
+    code: "MAP_LOCK_SELECTION_CHANGED";
+    mapNums: number[];
+};
+
+function mapLockSelectionChanged(mapNums: number[]): MapLockSelectionChangedError {
+    const error = new Error("Map lock selection changed") as MapLockSelectionChangedError;
+    error.code = "MAP_LOCK_SELECTION_CHANGED";
+    error.mapNums = mapNums;
+    return error;
+}
+
+function isMapLockSelectionChangedError(error: unknown): error is MapLockSelectionChangedError {
+    return (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "MAP_LOCK_SELECTION_CHANGED" &&
+        "mapNums" in error &&
+        Array.isArray(error.mapNums)
+    );
+}
+
 async function withMapLock<T>(mapNum: number, fn: () => Promise<T> | T): Promise<T> {
     while (mapWriteLocks.has(mapNum)) {
         try {
@@ -44,6 +66,38 @@ async function withMapLock<T>(mapNum: number, fn: () => Promise<T> | T): Promise
             mapWriteLocks.delete(mapNum);
         }
         resolveLock();
+    }
+}
+
+async function withMapLocks<T>(mapNums: number[], fn: () => Promise<T> | T): Promise<T> {
+    const orderedMapNums = Array.from(new Set(mapNums)).sort((a, b) => a - b);
+
+    const acquireNext = (index: number): Promise<T> => {
+        if (index >= orderedMapNums.length) {
+            return Promise.resolve(fn());
+        }
+        return withMapLock(orderedMapNums[index], () => acquireNext(index + 1));
+    };
+
+    return acquireNext(0);
+}
+
+async function withStableMapLocks<T>(
+    initialMapNums: number[],
+    fn: (lockedMapNums: Set<number>) => Promise<T> | T,
+): Promise<T> {
+    let mapNums = initialMapNums;
+
+    while (true) {
+        const lockedMapNums = new Set(mapNums);
+        try {
+            return await withMapLocks(mapNums, () => fn(lockedMapNums));
+        } catch (error) {
+            if (!isMapLockSelectionChangedError(error)) {
+                throw error;
+            }
+            mapNums = [...lockedMapNums, ...error.mapNums];
+        }
     }
 }
 
@@ -117,7 +171,9 @@ export async function upsertMapExit(
     exit: TileExit;
     pairedExitCreated: boolean;
 }> {
-    return withMapLock(mapNum, async () => {
+    const lockMapNums = input.createPaired ? [mapNum, input.destMap] : [mapNum];
+
+    return withMapLocks(lockMapNums, async () => {
         const coordKey = `${x},${y}`;
         const exitTarget: TileExit = {
             map: input.destMap,
@@ -130,25 +186,27 @@ export async function upsertMapExit(
             sourceSpecials.exits = {};
         }
         sourceSpecials.exits[coordKey] = exitTarget;
-        writeMapSpecials(mapNum, sourceSpecials);
 
         let pairedExitCreated = false;
+        let destSpecials: SpecialsJson | undefined;
 
         if (input.createPaired) {
-            await withMapLock(input.destMap, async () => {
-                const destSpecials = readMapSpecials(input.destMap);
-                if (!destSpecials.exits) {
-                    destSpecials.exits = {};
-                }
-                const destCoordKey = `${input.destX},${input.destY}`;
-                destSpecials.exits[destCoordKey] = {
-                    map: mapNum,
-                    x,
-                    y,
-                };
-                writeMapSpecials(input.destMap, destSpecials);
-                pairedExitCreated = true;
-            });
+            destSpecials = input.destMap === mapNum ? sourceSpecials : readMapSpecials(input.destMap);
+            if (!destSpecials.exits) {
+                destSpecials.exits = {};
+            }
+            const destCoordKey = `${input.destX},${input.destY}`;
+            destSpecials.exits[destCoordKey] = {
+                map: mapNum,
+                x,
+                y,
+            };
+            pairedExitCreated = true;
+        }
+
+        writeMapSpecials(mapNum, sourceSpecials);
+        if (destSpecials && input.destMap !== mapNum) {
+            writeMapSpecials(input.destMap, destSpecials);
         }
 
         return {
@@ -173,8 +231,20 @@ export async function deleteMapExit(
     deleted: boolean;
     pairedExitDeleted: boolean;
 }> {
-    return withMapLock(mapNum, async () => {
-        const coordKey = `${x},${y}`;
+    const coordKey = `${x},${y}`;
+    const lockMapNums = [mapNum];
+
+    if (deletePaired) {
+        await withMapLock(mapNum, async () => {
+            const sourceSpecials = readMapSpecials(mapNum);
+            const existingExit = sourceSpecials.exits?.[coordKey];
+            if (existingExit && "map" in existingExit) {
+                lockMapNums.push(existingExit.map);
+            }
+        });
+    }
+
+    return withStableMapLocks(lockMapNums, async (lockedMapNums) => {
         const sourceSpecials = readMapSpecials(mapNum);
         const existingExit = sourceSpecials.exits?.[coordKey];
 
@@ -189,24 +259,31 @@ export async function deleteMapExit(
         }
 
         delete sourceSpecials.exits[coordKey];
-        writeMapSpecials(mapNum, sourceSpecials);
 
         let pairedExitDeleted = false;
+        let destSpecials: SpecialsJson | undefined;
+        let destMap: number | undefined;
 
         if (deletePaired && "map" in existingExit) {
-            const destMap = existingExit.map;
+            destMap = existingExit.map;
+            if (!lockedMapNums.has(destMap)) {
+                throw mapLockSelectionChanged([destMap]);
+            }
+
             const destX = existingExit.x;
             const destY = existingExit.y;
             const destCoordKey = `${destX},${destY}`;
+            destSpecials = destMap === mapNum ? sourceSpecials : readMapSpecials(destMap);
 
-            await withMapLock(destMap, async () => {
-                const destSpecials = readMapSpecials(destMap);
-                if (destSpecials.exits?.[destCoordKey]) {
-                    delete destSpecials.exits[destCoordKey];
-                    writeMapSpecials(destMap, destSpecials);
-                    pairedExitDeleted = true;
-                }
-            });
+            if (destSpecials.exits?.[destCoordKey]) {
+                delete destSpecials.exits[destCoordKey];
+                pairedExitDeleted = true;
+            }
+        }
+
+        writeMapSpecials(mapNum, sourceSpecials);
+        if (destSpecials && destMap !== undefined && destMap !== mapNum) {
+            writeMapSpecials(destMap, destSpecials);
         }
 
         return {

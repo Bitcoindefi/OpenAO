@@ -13,6 +13,20 @@ const TEST_MAP_1 = 9991;
 const TEST_MAP_2 = 9992;
 const MAP_1_DIR = path.join(MAPS_SOURCE_DIR, `mapa_${TEST_MAP_1}`);
 const MAP_2_DIR = path.join(MAPS_SOURCE_DIR, `mapa_${TEST_MAP_2}`);
+const OPERATION_TIMEOUT_MS = 1000;
+
+async function expectOperationToComplete<T>(promise: Promise<T>, operationName: string): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${operationName} timed out`)), OPERATION_TIMEOUT_MS);
+    });
+
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+        if (timeout) {
+            clearTimeout(timeout);
+        }
+    });
+}
 
 describe("Map Exits CRUD & Bidirectional Pairing (OpenAO #10)", () => {
     beforeEach(() => {
@@ -89,6 +103,64 @@ describe("Map Exits CRUD & Bidirectional Pairing (OpenAO #10)", () => {
 
         const map2Exits = await getMapExits(TEST_MAP_2);
         expect(map2Exits.exits["25,35"]).toEqual({ map: TEST_MAP_1, x: 10, y: 15 });
+    });
+
+    it("should insert and delete a same-map paired exit without deadlocking", async () => {
+        const result = await expectOperationToComplete(
+            upsertMapExit(TEST_MAP_1, 12, 13, {
+                destMap: TEST_MAP_1,
+                destX: 14,
+                destY: 15,
+                createPaired: true,
+            }),
+            "same-map paired exit creation",
+        );
+
+        expect(result.pairedExitCreated).toBe(true);
+
+        let map1Exits = await getMapExits(TEST_MAP_1);
+        expect(map1Exits.exits["12,13"]).toEqual({ map: TEST_MAP_1, x: 14, y: 15 });
+        expect(map1Exits.exits["14,15"]).toEqual({ map: TEST_MAP_1, x: 12, y: 13 });
+
+        const deleteResult = await expectOperationToComplete(
+            deleteMapExit(TEST_MAP_1, 12, 13, true),
+            "same-map paired exit deletion",
+        );
+
+        expect(deleteResult.deleted).toBe(true);
+        expect(deleteResult.pairedExitDeleted).toBe(true);
+
+        map1Exits = await getMapExits(TEST_MAP_1);
+        expect(map1Exits.exits["12,13"]).toBeUndefined();
+        expect(map1Exits.exits["14,15"]).toBeUndefined();
+    });
+
+    it("should complete opposite-direction paired writes without lock-order deadlocks", async () => {
+        await expectOperationToComplete(
+            Promise.all([
+                upsertMapExit(TEST_MAP_1, 10, 10, {
+                    destMap: TEST_MAP_2,
+                    destX: 20,
+                    destY: 20,
+                    createPaired: true,
+                }),
+                upsertMapExit(TEST_MAP_2, 30, 30, {
+                    destMap: TEST_MAP_1,
+                    destX: 40,
+                    destY: 40,
+                    createPaired: true,
+                }),
+            ]),
+            "opposite-direction paired exit writes",
+        );
+
+        const map1Exits = await getMapExits(TEST_MAP_1);
+        expect(map1Exits.exits["10,10"]).toEqual({ map: TEST_MAP_2, x: 20, y: 20 });
+        expect(map1Exits.exits["40,40"]).toEqual({ map: TEST_MAP_2, x: 30, y: 30 });
+
+        const map2Exits = await getMapExits(TEST_MAP_2);
+        expect(map2Exits.exits["20,20"]).toEqual({ map: TEST_MAP_1, x: 10, y: 10 });
+        expect(map2Exits.exits["30,30"]).toEqual({ map: TEST_MAP_1, x: 40, y: 40 });
     });
 
     it("should delete an exit and optionally delete its reverse pair", async () => {
