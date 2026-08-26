@@ -1,0 +1,69 @@
+{
+    "1": {
+        "name": "Comerciante de Ullathorpe",
+        "desc": "Vendedor general de provisiones y equipamiento básico",
+        "npcType": 1,
+        "idHead": 1,
+        "idBody": 1,
+        "movement": 0,
+        "hp": 100,
+        "maxHp": 100,
+        "gold": 500,
+        "exp": 0,
+        "trade": [
+            {
+                "item": 1,
+                "cant": 100
+            },
+            {
+                "item": 2,
+                "cant": 50
+            },
+            {
+                "item": 3,
+                "cant": 50
+            }
+        ]
+    },
+    "2": {
+        "name": "Sacerdote",
+        "desc": "Cura heridas y resucita a los aventureros caídos",
+        "npcType": 2,
+        "idHead": 2,
+        "idBody": 2,
+        "movement": 0,
+        "hp": 250,
+        "maxHp": 250,
+        "gold": 0,
+        "exp": 0
+    },
+    "3": {
+        "name": "Banquero",
+        "desc": "Guarda oro y pertenencias en las bóvedas seguras",
+        "npcType": 3,
+        "idHead": 3,
+        "idBody": 3,
+        "movement": 0,
+        "hp": 200,
+        "maxHp": 200,
+        "gold": 10000,
+        "exp": 0
+    },
+    "4": {
+        "name": "Guardia Real",
+        "desc": "Protege las ciudades de criminales y criaturas salvajes",
+        "npcType": 4,
+        "idHead": 4,
+        "idBody": 4,
+        "movement": 1,
+        "hp": 500,
+        "maxHp": 500,
+        "minHit": 20,
+        "maxHit": 40,
+        "def": 25,
+        "poderAtaque": 50,
+        "poderEvasion": 30,
+        "gold": 50,
+        "exp": 50
+    }
+}
