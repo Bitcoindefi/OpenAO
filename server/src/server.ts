@@ -14,6 +14,11 @@ import type {
 } from "./types/runtime";
 import { getClientById } from "./runtimeRegistry";
 import * as safeZone from "./safeZone";
+import {
+    gracefulShutdown,
+    type GracefulShutdownDependencies,
+    type ShutdownClient,
+} from "./gracefulShutdown";
 
 export {};
 const config = require("./config");
@@ -949,3 +954,26 @@ createDynamicScheduler(
 );
 
 void saveOnlineStatsSnapshot();
+
+function getGracefulShutdownDependencies(): GracefulShutdownDependencies {
+    return {
+        clients: vars.clients as Record<string, ShutdownClient | undefined>,
+        tokenAuth: vars.tokenAuth,
+        fetchUrl: funct.fetchUrl,
+        exit: (code) => process.exit(code),
+        setTimeout,
+        clearTimeout,
+        writeOut: (message) => process.stdout.write(message),
+        writeErr: (message) => process.stderr.write(message),
+    };
+}
+
+export { gracefulShutdown };
+
+process.on("SIGINT", () =>
+    void gracefulShutdown("SIGINT", getGracefulShutdownDependencies()),
+);
+process.on("SIGTERM", () =>
+    void gracefulShutdown("SIGTERM", getGracefulShutdownDependencies()),
+);
+

@@ -12,6 +12,44 @@ export const UPLOADED_GRAPHIC_INDEX_START = 1_000_000;
 /** Los mapas del juego son de 100x100. */
 export const MAP_SIZE = 100;
 
+/**
+ * Mapas protegidos contra modificaciones destructivas (ciudades principales).
+ * Requieren autorizacion explicita con override para ser modificados.
+ */
+export const PROTECTED_MAPS = new Set<number>([1, 34, 59, 60, 61]);
+
+export function isMapProtected(mapNum: number): boolean {
+    return PROTECTED_MAPS.has(mapNum);
+}
+
+export function canAccountEditMap(
+    accountId: string,
+    mapNum: number,
+    isSuperAdmin: boolean,
+    allowedMapsForAccount?: number[],
+    allowProtectedOverride = false,
+): { allowed: boolean; reason?: string } {
+    if (isMapProtected(mapNum) && !allowProtectedOverride) {
+        return {
+            allowed: false,
+            reason: `El mapa ${mapNum} esta protegido contra modificaciones.`,
+        };
+    }
+
+    if (isSuperAdmin) {
+        return { allowed: true };
+    }
+
+    if (allowedMapsForAccount && allowedMapsForAccount.includes(mapNum)) {
+        return { allowed: true };
+    }
+
+    return {
+        allowed: false,
+        reason: `La cuenta ${accountId} no tiene permisos para editar el mapa ${mapNum}.`,
+    };
+}
+
 export type UploadedGraphic = {
     grhIndex: number;
     checksum: string;
