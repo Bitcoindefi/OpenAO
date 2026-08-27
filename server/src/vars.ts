@@ -1,5 +1,6 @@
 export {};
 const config = require("./config");
+const { PROTOCOL_LIMITS } = require("@openao/protocol") as typeof import("@openao/protocol");
 const { applyBalanceDataToVars, createDefaultBalanceData } = require("./balanceData");
 const vars = new (Vars as any)();
 
@@ -253,8 +254,8 @@ function Vars(this: any) {
 
     this.areaNpc = {};
 
-    this.areaVisionWidth = 31;
-    this.areaVisionHeight = 31;
+    this.areaVisionWidth = PROTOCOL_LIMITS.areaVisionWidth;
+    this.areaVisionHeight = PROTOCOL_LIMITS.areaVisionHeight;
     this.areaVisionRangeX = Math.floor(this.areaVisionWidth / 2);
     this.areaVisionRangeY = Math.floor(this.areaVisionHeight / 2);
     this.areaVisionDiameterX = this.areaVisionRangeX * 2 + 1;

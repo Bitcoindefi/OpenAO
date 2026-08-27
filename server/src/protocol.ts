@@ -33,6 +33,7 @@ const harvesting = require("./harvesting");
 const crafting = require("./crafting");
 const smelting = require("./smelting");
 const challengeManager = require("./challengeManager");
+const { PROTOCOL_LIMITS } = require("@openao/protocol") as typeof import("@openao/protocol");
 const LOGOUT_CANCELLED_MESSAGE = "[Servidor] La salida se canceló porque te moviste.";
 const MAX_PENDING_MOVE_QUEUE_LENGTH = 8;
 const REVIVE_CAST_MS = 10000;
@@ -899,9 +900,9 @@ const AREA_DIAMETER_X = vars.areaVisionDiameterX;
 const AREA_DIAMETER_Y = vars.areaVisionDiameterY;
 const AREA_OUTSIDE_OFFSET_X = vars.areaVisionOutsideOffsetX;
 const AREA_OUTSIDE_OFFSET_Y = vars.areaVisionOutsideOffsetY;
-const CLIENT_VIEW_RANGE_X = 10;
-const CLIENT_VIEW_RANGE_Y = 10;
-const CLIENT_VIEW_EXTRA_BOTTOM_Y = 1;
+const CLIENT_VIEW_RANGE_X = PROTOCOL_LIMITS.clientViewRangeX;
+const CLIENT_VIEW_RANGE_Y = PROTOCOL_LIMITS.clientViewRangeY;
+const CLIENT_VIEW_EXTRA_BOTTOM_Y = PROTOCOL_LIMITS.clientViewExtraBottomY;
 
 function isOutsideClientVision(origin: { x: number; y: number }, target: { x: number; y: number }) {
     const deltaX = Math.abs(origin.x - target.x);

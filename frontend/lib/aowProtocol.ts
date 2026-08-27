@@ -1,83 +1,10 @@
-export const CLIENT_PACKET_ID = {
-    getMyCharacter: 1,
-    getCharacter: 2,
-    changeRopa: 3,
-    actPosition: 4,
-    changeHeading: 5,
-    deleteCharacter: 6,
-    dialog: 7,
-    console: 8,
-    pong: 9,
-    animFX: 10,
-    inmo: 11,
-    updateHP: 12,
-    updateMaxHP: 13,
-    updateMana: 14,
-    telepMe: 15,
-    actOnline: 19,
-    consoleOnline: 20,
-    actPositionServer: 21,
-    actExp: 22,
-    actMyLevel: 23,
-    actGold: 24,
-    actColorName: 25,
-    changeHelmet: 26,
-    changeWeapon: 27,
-    error: 28,
-    changeName: 29,
-    getNpc: 30,
-    changeShield: 31,
-    putBodyAndHeadDead: 32,
-    revivirUsuario: 33,
-    quitarUserInvItem: 34,
-    renderItem: 35,
-    deleteItem: 36,
-    agregarUserInvItem: 37,
-    changeArrow: 38,
-    blockMap: 39,
-    changeObjIndex: 40,
-    openTrade: 41,
-    aprenderSpell: 42,
-    closeForce: 43,
-    nameMap: 44,
-    changeBody: 45,
-    navegando: 46,
-    updateAgilidad: 47,
-    updateFuerza: 48,
-    playSound: 49,
-    openBail: 50,
-    closeBail: 51,
-    openAdminIntervals: 52,
-    panelSnapshot: 53,
-    panelSnapshotChunk: 54,
-    partyState: 55,
-    clanState: 56,
-    characterStatsSnapshot: 57,
-    characterStatsSnapshotChunk: 58,
-    startCastBar: 59,
-    stopCastBar: 60,
-    openCrafting: 61,
-    closeTrade: 62,
-    openMarket: 63,
-    openRetos: 64,
-    createProjectile: 65,
-    spellProjectile: 66,
-    globalNotice: 67,
-    batch: 68,
-    tInmo: 69,
-    tUpdateHP: 70,
-    tUpdateMana: 71,
-    areaCharactersSnapshot: 72,
-    areaNpcsSnapshot: 73,
-    areaItemsSnapshot: 74,
-    areaMetaSnapshot: 75,
-    moveEntity: 76,
-    selfFlagsDelta: 77,
-    selfVitalsDelta: 78,
-    selfMapMetaDelta: 79,
-    spellVisual: 80,
-    entityVitalsDelta: 81,
-} as const;
+import {
+    CLIENT_PACKET_ID,
+    SERVER_PACKET_ID,
+    encodeServerPacket,
+} from "@openao/protocol";
+
+export { CLIENT_PACKET_ID, SERVER_PACKET_ID } from "@openao/protocol";
 
 export type PanelShare = {
     type: string;
@@ -169,39 +96,6 @@ export type CharacterStatsSnapshotChunk = {
     totalChunks: number;
     chunk: string;
 };
-
-export const SERVER_PACKET_ID = {
-    changeHeading: 175,
-    click: 183,
-    useItemClick: 197,
-    equiparItem: 210,
-    connectCharacter: 212,
-    position: 176,
-    dialog: 221,
-    ping: 184,
-    attackMele: 229,
-    attackRange: 236,
-    attackSpell: 243,
-    tirarItem: 200,
-    agarrarItem: 205,
-    buyItem: 214,
-    sellItem: 222,
-    resyncPosition: 187,
-    changeSeguro: 196,
-    reorderSpell: 228,
-    reorderInventoryItem: 235,
-    toggleHiddenSkill: 244,
-    useItemU: 203,
-    changeClanSeguro: 209,
-    craftItem: 246,
-    reorderBankItem: 230,
-    changeBankTab: 216,
-    depositBankGold: 224,
-    withdrawBankGold: 237,
-    closeTrade: 190,
-    marketAction: 239,
-    retosAction: 248,
-} as const;
 
 export interface CharacterSnapshot {
     id: number;
@@ -1994,26 +1888,22 @@ export function createConnectCharacterPacket(params: {
     typeGame?: number;
     idChar?: number;
 }): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.connectCharacter);
-    writer.writeString(params.ticket.trim());
-    writer.writeByte(params.typeGame ?? 1);
-    writer.writeByte(params.idChar ?? 0);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("connectCharacter", {
+        ticket: params.ticket.trim(),
+        typeGame: params.typeGame ?? 1,
+        idChar: params.idChar ?? 0,
+    });
 }
 
 export function createPositionPacket(
     heading: number,
     moveId: number,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.position);
-    writer.writeByte(heading);
-    writer.writeInt(moveId);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("position", { heading, moveId });
 }
 
 export function createResyncPositionPacket(): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.resyncPosition);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("resyncPosition");
 }
 
 export function createClickPacket(
@@ -2021,97 +1911,69 @@ export function createClickPacket(
     y: number,
     button = 0,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.click);
-    writer.writeByte(x);
-    writer.writeByte(y);
-    writer.writeByte(button);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("click", { x, y, button });
 }
 
 export function createChangeHeadingPacket(heading: number): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.changeHeading);
-    writer.writeByte(heading);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("changeHeading", { heading });
 }
 
 export function createPingPacket(token = 0): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.ping);
-    writer.writeInt(token);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("ping", { token });
 }
 
 export function createChangeSeguroPacket(): ArrayBuffer {
-    return new PacketWriter(SERVER_PACKET_ID.changeSeguro).toArrayBuffer();
+    return encodeServerPacket("changeSeguro");
 }
 
 export function createChangeClanSeguroPacket(): ArrayBuffer {
-    return new PacketWriter(SERVER_PACKET_ID.changeClanSeguro).toArrayBuffer();
+    return encodeServerPacket("changeClanSeguro");
 }
 
 export function createDialogPacket(message: string): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.dialog);
-    writer.writeString(message);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("dialog", { message });
 }
 
 export function createEquipItemPacket(slot: number): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.equiparItem);
-    writer.writeInt(slot);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("equiparItem", { slot });
 }
 
 export function createUseItemClickPacket(slot: number): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.useItemClick);
-    writer.writeInt(slot);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("useItemClick", { slot });
 }
 
 export function createUseItemUPacket(slot: number): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.useItemU);
-    writer.writeInt(slot);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("useItemU", { slot });
 }
 
 export function createDropItemPacket(
     slot: number,
     amount: number,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.tirarItem);
-    writer.writeInt(slot);
-    writer.writeShort(amount);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("tirarItem", { slot, amount });
 }
 
 export function createPickupItemPacket(): ArrayBuffer {
-    return new PacketWriter(SERVER_PACKET_ID.agarrarItem).toArrayBuffer();
+    return encodeServerPacket("agarrarItem");
 }
 
 export function createBuyItemPacket(slot: number, amount: number): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.buyItem);
-    writer.writeByte(slot);
-    writer.writeShort(amount);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("buyItem", { slot, amount });
 }
 
 export function createSellItemPacket(
     slot: number,
     amount: number,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.sellItem);
-    writer.writeByte(slot);
-    writer.writeShort(amount);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("sellItem", { slot, amount });
 }
 
 export function createAttackMeleePacket(): ArrayBuffer {
-    return new PacketWriter(SERVER_PACKET_ID.attackMele).toArrayBuffer();
+    return encodeServerPacket("attackMele");
 }
 
 export function createAttackRangePacket(x: number, y: number): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.attackRange);
-    writer.writeByte(x);
-    writer.writeByte(y);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("attackRange", { x, y });
 }
 
 export function createAttackSpellPacket(
@@ -2120,89 +1982,78 @@ export function createAttackSpellPacket(
     y: number,
     preferSelfIfEmpty = false,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.attackSpell);
-    writer.writeByte(spellSlot);
-    writer.writeByte(x);
-    writer.writeByte(y);
-    writer.writeByte(preferSelfIfEmpty ? 1 : 0);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("attackSpell", {
+        spellSlot,
+        x,
+        y,
+        preferSelfIfEmpty: preferSelfIfEmpty ? 1 : 0,
+    });
 }
 
 export function createReorderSpellPacket(
     sourceSlot: number,
     targetSlot: number,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.reorderSpell);
-    writer.writeByte(sourceSlot);
-    writer.writeByte(targetSlot);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("reorderSpell", { sourceSlot, targetSlot });
 }
 
 export function createReorderInventoryItemPacket(
     sourceSlot: number,
     targetSlot: number,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.reorderInventoryItem);
-    writer.writeByte(sourceSlot);
-    writer.writeByte(targetSlot);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("reorderInventoryItem", {
+        sourceSlot,
+        targetSlot,
+    });
 }
 
 export function createReorderBankItemPacket(
     sourceSlot: number,
     targetSlot: number,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.reorderBankItem);
-    writer.writeByte(sourceSlot);
-    writer.writeByte(targetSlot);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("reorderBankItem", { sourceSlot, targetSlot });
 }
 
 export function createChangeBankTabPacket(
     tab: "character" | "account" | "clan",
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.changeBankTab);
-    writer.writeByte(tab === "account" ? 1 : tab === "clan" ? 2 : 0);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("changeBankTab", {
+        tab: tab === "account" ? 1 : tab === "clan" ? 2 : 0,
+    });
 }
 
 export function createDepositBankGoldPacket(amount: number): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.depositBankGold);
-    writer.writeInt(amount);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("depositBankGold", { amount });
 }
 
 export function createWithdrawBankGoldPacket(amount: number): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.withdrawBankGold);
-    writer.writeInt(amount);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("withdrawBankGold", { amount });
 }
 
 export function createCloseTradePacket(): ArrayBuffer {
-    return new PacketWriter(SERVER_PACKET_ID.closeTrade).toArrayBuffer();
+    return encodeServerPacket("closeTrade");
 }
 
 export function createMarketActionPacket(
     action: "refresh" | "create" | "buy" | "cancel" | "claim",
     payload: Record<string, unknown> = {},
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.marketAction);
-    writer.writeString(JSON.stringify({ action, ...payload }));
-    return writer.toArrayBuffer();
+    return encodeServerPacket("marketAction", {
+        payload: JSON.stringify({ action, ...payload }),
+    });
 }
 
 export function createRetosActionPacket(
     action: "refresh" | "create" | "join" | "cancel",
     payload: Record<string, unknown> = {},
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.retosAction);
-    writer.writeString(JSON.stringify({ action, ...payload }));
-    return writer.toArrayBuffer();
+    return encodeServerPacket("retosAction", {
+        payload: JSON.stringify({ action, ...payload }),
+    });
 }
 
 export function createToggleHiddenSkillPacket(): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.toggleHiddenSkill);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("toggleHiddenSkill");
 }
 
 export function createCraftItemPacket(
@@ -2210,13 +2061,12 @@ export function createCraftItemPacket(
     itemId: number,
     amount: number,
 ): ArrayBuffer {
-    const writer = new PacketWriter(SERVER_PACKET_ID.craftItem);
-    writer.writeByte(
-        profession === "blacksmith" ? 1 : profession === "tailoring" ? 2 : 0,
-    );
-    writer.writeInt(itemId);
-    writer.writeShort(amount);
-    return writer.toArrayBuffer();
+    return encodeServerPacket("craftItem", {
+        profession:
+            profession === "blacksmith" ? 1 : profession === "tailoring" ? 2 : 0,
+        itemId,
+        amount,
+    });
 }
 
 export function toPlayerHudState(snapshot: CharacterSnapshot): PlayerHudState {
