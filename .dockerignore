@@ -1,0 +1,21 @@
+# Build context for the frontend image is the REPO ROOT (frontend/Dockerfile
+# generates the optimized maps from server/mapas_source/ before building).
+# Keep the context small: exclude everything the frontend build does not need.
+
+.git
+.github
+database
+api
+screenshots
+
+**/node_modules
+**/.next
+**/dist
+**/.env*
+**/.DS_Store
+**/.opencode
+**/test-results
+**/playwright-report
+
+# Generated at build time inside the image; never ship local copies in.
+frontend/public/maps_optimized

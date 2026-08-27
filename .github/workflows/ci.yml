@@ -160,6 +160,14 @@ jobs:
         working-directory: frontend
         run: pnpm exec tsc --noEmit
 
+      - name: Install server dependencies (map exporter)
+        working-directory: server
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate optimized maps
+        working-directory: server
+        run: pnpm exec tsx src/scripts/exportFrontendOptimizedMaps.ts
+
       - name: Build
         working-directory: frontend
         env:
@@ -193,6 +201,6 @@ jobs:
       - name: Build Frontend image
         uses: docker/build-push-action@v6
         with:
-          context: ./frontend
+          context: .
           file: ./frontend/Dockerfile
           push: false
