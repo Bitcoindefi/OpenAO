@@ -482,6 +482,16 @@ export function useAssetPipeline({
                 return;
             }
 
+            // Skip prefetching if user has data saver enabled or slow network
+            const navConnection = typeof navigator !== "undefined" ? (navigator as any)?.connection : null;
+            if (
+                navConnection?.saveData ||
+                navConnection?.effectiveType === "slow-2g" ||
+                navConnection?.effectiveType === "2g"
+            ) {
+                return;
+            }
+
             const nearbyMaps = collectAdjacentMapNumbers(
                 engine.mapData,
                 engine.mapNumber,
@@ -490,18 +500,21 @@ export function useAssetPipeline({
                 return;
             }
 
+            // Cap prefetch to at most 2 adjacent maps to avoid RAM and bandwidth spikes
+            const mapsToPrefetch = nearbyMaps.slice(0, 2);
+
             updateLoadingProgress(
                 "Precargando alrededores",
                 88,
-                `Analizando ${nearbyMaps.length} mapas cercanos...`,
+                `Analizando ${mapsToPrefetch.length} mapas cercanos...`,
             );
 
-            for (let index = 0; index < nearbyMaps.length; index++) {
+            for (let index = 0; index < mapsToPrefetch.length; index++) {
                 if (engine.isDestroyed) {
                     return;
                 }
 
-                const targetMap = nearbyMaps[index];
+                const targetMap = mapsToPrefetch[index];
                 try {
                     const nextMapData = await loadMapData(targetMap);
                     const nextMapDimensions = getMapDimensions(
