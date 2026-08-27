@@ -93,7 +93,7 @@ jobs:
         run: pnpm run build
 
   server:
-    name: Server (typecheck, lint, build)
+    name: Server (typecheck, test, lint, build)
     runs-on: ubuntu-latest
 
     steps:
@@ -119,6 +119,10 @@ jobs:
       - name: Lint
         working-directory: server
         run: pnpm run lint
+
+      - name: Test
+        working-directory: server
+        run: pnpm test
 
       - name: Typecheck
         working-directory: server
