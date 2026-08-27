@@ -222,6 +222,8 @@ export function useGameSession({
         const socketInstanceId = activeSocketInstanceRef.current + 1;
         activeSocketInstanceRef.current = socketInstanceId;
 
+        let reconnectTimeoutId: number | null = null;
+
         const isCurrentSocketInstance = (socket?: WebSocket | null) =>
             Boolean(
                 socket &&
@@ -267,6 +269,10 @@ export function useGameSession({
 
         const disconnectSocket = () => {
             clearPing();
+            if (reconnectTimeoutId !== null) {
+                window.clearTimeout(reconnectTimeoutId);
+                reconnectTimeoutId = null;
+            }
             fpsDisplayTextRef.current = "FPS: 0";
             clearUseItemQueuesRef.current();
             clearTargetingModeRef.current();
@@ -280,6 +286,10 @@ export function useGameSession({
             const socket = websocketRef.current;
             websocketRef.current = null;
             if (socket) {
+                socket.onopen = null;
+                socket.onmessage = null;
+                socket.onerror = null;
+                socket.onclose = null;
                 socket.close();
             }
         };
@@ -304,46 +314,9 @@ export function useGameSession({
         disconnectSocket();
         activeSessionKeyRef.current = connection.sessionKey;
 
-        const socket = new WebSocket(connection.wsUrl);
-        socket.binaryType = "arraybuffer";
-        websocketRef.current = socket;
-
-        emitStatusRef.current({ connected: false, connecting: true });
-
-        socket.onopen = () => {
-            if (
-                activeSessionKeyRef.current !== connection.sessionKey ||
-                !isCurrentSocketInstance(socket)
-            ) {
-                socket.close();
-                return;
-            }
-
-            const sendPing = () => {
-                if (socket.readyState !== WebSocket.OPEN) {
-                    return;
-                }
-
-                const token = nextPingTokenRef.current++;
-                pendingPingRef.current = {
-                    token,
-                    sentAt: performance.now(),
-                };
-                socket.send(createPingPacket(token));
-            };
-
-            socket.send(
-                createConnectCharacterPacket({
-                    ticket: connection.ticket,
-                    typeGame: connection.typeGame,
-                    idChar: connection.idChar,
-                }),
-            );
-
-            flushPendingChatRequestRef.current();
-            sendPing();
-            pingIntervalRef.current = window.setInterval(sendPing, 10000);
-        };
+        const MAX_RECONNECT_ATTEMPTS = 6;
+        const BASE_RECONNECT_DELAY_MS = 1000;
+        const MAX_RECONNECT_DELAY_MS = 30000;
 
         const processIncomingPacketQueue = async () => {
             if (isProcessingIncomingPacketsRef.current) {
@@ -449,65 +422,194 @@ export function useGameSession({
             return true;
         };
 
-        socket.onmessage = (event) => {
-            if (!isCurrentSocketInstance(socket)) {
+        const scheduleReconnect = (attempt: number) => {
+            if (reconnectTimeoutId !== null) {
                 return;
             }
-
-            const rawMessage = event.data as
-                | Blob
-                | ArrayBuffer
-                | ArrayBufferView;
-
-            void tryHandlePongMessage(rawMessage)
-                .then((wasPong) => {
-                    if (wasPong) {
-                        return;
-                    }
-
-                    incomingPacketQueueRef.current.push(rawMessage);
-                    void processIncomingPacketQueue();
-                })
-                .catch(() => {
-                    incomingPacketQueueRef.current.push(rawMessage);
-                    void processIncomingPacketQueue();
-                });
-        };
-
-        socket.onerror = () => {
-            if (!isCurrentSocketInstance(socket)) {
-                return;
-            }
-
-            setIsSceneReadyRef.current(false);
-            emitStatusRef.current({
-                connected: false,
-                connecting: false,
-                error: "No se pudo establecer la conexion websocket.",
-            });
-        };
-
-        socket.onclose = () => {
-            clearPing();
             if (
-                activeSessionKeyRef.current === connection.sessionKey &&
-                isCurrentSocketInstance(socket)
+                activeSessionKeyRef.current !== connection.sessionKey ||
+                !isClientReadyForConnection
             ) {
-                setIsSceneReadyRef.current(false);
-                const previousError = latestStatusRef.current.error;
+                return;
+            }
+
+            if (attempt >= MAX_RECONNECT_ATTEMPTS) {
                 emitStatusRef.current({
                     connected: false,
                     connecting: false,
-                    error: previousError || "Conexion cerrada.",
+                    error: "No se pudo reconectar. Por favor, recarga la página.",
                 });
+                return;
             }
+
+            const delay = Math.min(
+                BASE_RECONNECT_DELAY_MS * Math.pow(2, attempt),
+                MAX_RECONNECT_DELAY_MS,
+            );
+            const remainingSec = Math.ceil(delay / 1000);
+
+            emitStatusRef.current({
+                connected: false,
+                connecting: true,
+                error: `Reconectando… (intento ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS}, en ${remainingSec}s)`,
+            });
+
+            reconnectTimeoutId = window.setTimeout(() => {
+                reconnectTimeoutId = null;
+                if (
+                    activeSessionKeyRef.current !== connection.sessionKey ||
+                    !isClientReadyForConnection
+                ) {
+                    return;
+                }
+                connectSocket(attempt + 1);
+            }, delay);
         };
 
+        const connectSocket = (reconnectAttempt = 0) => {
+            clearPing();
+            if (reconnectTimeoutId !== null) {
+                window.clearTimeout(reconnectTimeoutId);
+                reconnectTimeoutId = null;
+            }
+
+            const previousSocket = websocketRef.current;
+            if (previousSocket) {
+                previousSocket.onopen = null;
+                previousSocket.onmessage = null;
+                previousSocket.onerror = null;
+                previousSocket.onclose = null;
+                previousSocket.close();
+            }
+
+            const ws = new WebSocket(connection.wsUrl);
+            ws.binaryType = "arraybuffer";
+            websocketRef.current = ws;
+
+            if (reconnectAttempt === 0) {
+                emitStatusRef.current({ connected: false, connecting: true });
+            }
+
+            ws.onopen = () => {
+                if (
+                    activeSessionKeyRef.current !== connection.sessionKey ||
+                    !isCurrentSocketInstance(ws)
+                ) {
+                    ws.close();
+                    return;
+                }
+
+                if (reconnectTimeoutId !== null) {
+                    window.clearTimeout(reconnectTimeoutId);
+                    reconnectTimeoutId = null;
+                }
+
+                // Reset reconnect counter on successful connection so the next
+                // disconnect starts back at attempt 0 instead of where we left off.
+                ws.onerror = () => {
+                    if (!isCurrentSocketInstance(ws)) {
+                        return;
+                    }
+                    setIsSceneReadyRef.current(false);
+                    scheduleReconnect(0);
+                };
+
+                ws.onclose = () => {
+                    clearPing();
+                    if (
+                        activeSessionKeyRef.current !== connection.sessionKey ||
+                        !isCurrentSocketInstance(ws)
+                    ) {
+                        return;
+                    }
+                    setIsSceneReadyRef.current(false);
+                    scheduleReconnect(0);
+                };
+
+                emitStatusRef.current({ connected: true, connecting: false });
+
+                const sendPing = () => {
+                    if (ws.readyState !== WebSocket.OPEN) {
+                        return;
+                    }
+
+                    const token = nextPingTokenRef.current++;
+                    pendingPingRef.current = {
+                        token,
+                        sentAt: performance.now(),
+                    };
+                    ws.send(createPingPacket(token));
+                };
+
+                ws.send(
+                    createConnectCharacterPacket({
+                        ticket: connection.ticket,
+                        typeGame: connection.typeGame,
+                        idChar: connection.idChar,
+                    }),
+                );
+
+                flushPendingChatRequestRef.current();
+                sendPing();
+                pingIntervalRef.current = window.setInterval(sendPing, 10000);
+            };
+
+            ws.onmessage = (event) => {
+                if (!isCurrentSocketInstance(ws)) {
+                    return;
+                }
+
+                const rawMessage = event.data as
+                    | Blob
+                    | ArrayBuffer
+                    | ArrayBufferView;
+
+                void tryHandlePongMessage(rawMessage)
+                    .then((wasPong) => {
+                        if (wasPong) {
+                            return;
+                        }
+
+                        incomingPacketQueueRef.current.push(rawMessage);
+                        void processIncomingPacketQueue();
+                    })
+                    .catch(() => {
+                        incomingPacketQueueRef.current.push(rawMessage);
+                        void processIncomingPacketQueue();
+                    });
+            };
+
+            ws.onerror = () => {
+                if (!isCurrentSocketInstance(ws)) {
+                    return;
+                }
+
+                setIsSceneReadyRef.current(false);
+                scheduleReconnect(reconnectAttempt);
+            };
+
+            ws.onclose = () => {
+                clearPing();
+                if (
+                    activeSessionKeyRef.current !== connection.sessionKey ||
+                    !isCurrentSocketInstance(ws)
+                ) {
+                    return;
+                }
+
+                setIsSceneReadyRef.current(false);
+                scheduleReconnect(reconnectAttempt);
+            };
+        };
+
+        connectSocket(0);
+
         return () => {
-            if (
-                activeSessionKeyRef.current === connection.sessionKey &&
-                isCurrentSocketInstance(socket)
-            ) {
+            if (reconnectTimeoutId !== null) {
+                window.clearTimeout(reconnectTimeoutId);
+                reconnectTimeoutId = null;
+            }
+            if (activeSessionKeyRef.current === connection.sessionKey) {
                 activeSessionKeyRef.current = null;
             }
             clearAllDialogMessagesRef.current();
@@ -525,6 +627,7 @@ export function useGameSession({
             characterStatsChunkTotalRef.current = 0;
             disconnectSocket();
         };
+
     }, [
         connection,
         isClientReadyForConnection,
