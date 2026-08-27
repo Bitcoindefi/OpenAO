@@ -13,13 +13,15 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 const MAPS_DIR = path.resolve(process.cwd(), "public/maps_optimized");
-const MAP_FILE_PATTERN = /^mapa_\d+\.json$/i;
+const SOURCE_DIR = path.resolve(process.cwd(), "../server/mapas_source");
+const MAP_FILE_PATTERN = /^mapa_(\d+)\.json$/i;
+const MAP_DIR_PATTERN = /^mapa_(\d+)$/i;
 
-function fail() {
+function fail(message) {
     console.error(
         [
             "",
-            "✗ Faltan los mapas optimizados: public/maps_optimized/ no existe o está vacío.",
+            `✗ ${message}`,
             "",
             "  Sin ellos el mundo no se dibuja (404 en /maps_optimized/mapa_*.json).",
             "  No están en git: se generan desde server/mapas_source/. Corré:",
@@ -37,13 +39,42 @@ function fail() {
 }
 
 if (!existsSync(MAPS_DIR)) {
-    fail();
+    fail("Faltan los mapas optimizados: public/maps_optimized/ no existe.");
 }
 
-const mapCount = readdirSync(MAPS_DIR).filter((entry) => MAP_FILE_PATTERN.test(entry)).length;
+const mapFiles = readdirSync(MAPS_DIR).filter((entry) => MAP_FILE_PATTERN.test(entry));
 
-if (mapCount === 0) {
-    fail();
+if (mapFiles.length === 0) {
+    fail("Faltan los mapas optimizados: public/maps_optimized/ está vacío.");
 }
 
-console.log(`✓ Mapas optimizados presentes: ${mapCount} archivos en public/maps_optimized`);
+// If the map sources are available (normal repo checkout), also verify the
+// export is COMPLETE: an interrupted export that produced only a few maps
+// would still 404 for most of the world.
+if (existsSync(SOURCE_DIR)) {
+    const expectedIds = readdirSync(SOURCE_DIR, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && MAP_DIR_PATTERN.test(entry.name))
+        .map((entry) => entry.name.match(MAP_DIR_PATTERN)[1]);
+
+    const presentIds = new Set(
+        mapFiles.map((file) => file.match(MAP_FILE_PATTERN)[1]),
+    );
+
+    const missingIds = expectedIds.filter((id) => !presentIds.has(id));
+
+    if (missingIds.length > 0) {
+        fail(
+            `Mapas incompletos: faltan ${missingIds.length} de ${expectedIds.length} ` +
+                `(ej: mapa_${missingIds[0]}.json).`,
+        );
+    }
+
+    console.log(
+        `✓ Mapas optimizados completos: ${mapFiles.length}/${expectedIds.length} archivos en public/maps_optimized`,
+    );
+} else {
+    console.log(
+        `✓ Mapas optimizados presentes: ${mapFiles.length} archivos en public/maps_optimized ` +
+            "(no se pudo verificar completitud: server/mapas_source no está disponible)",
+    );
+}

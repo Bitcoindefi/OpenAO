@@ -23,9 +23,11 @@ COPY server/src/mapNpcStorage.ts ./src/mapNpcStorage.ts
 COPY server/src/scripts/exportFrontendOptimizedMaps.ts ./src/scripts/exportFrontendOptimizedMaps.ts
 COPY server/mapas_source ./mapas_source
 
-# Fails loudly ("No se encontraron mapas para exportar.") if the sources are missing.
+# Fails loudly ("No se encontraron mapas para exportar.") if the sources are
+# missing, and the guard asserts the export is COMPLETE (one output per source
+# map) so an interrupted export cannot ship a half-rendered world.
 RUN pnpm exec tsx src/scripts/exportFrontendOptimizedMaps.ts --output-dir=/maps/out \
-    && test "$(ls /maps/out | grep -c '^mapa_')" -gt 0
+    && test "$(ls /maps/out | grep -c '^mapa_')" -eq "$(ls mapas_source | grep -c '^mapa_')"
 
 # --- Stage 2: frontend dependencies ---
 FROM base AS deps
