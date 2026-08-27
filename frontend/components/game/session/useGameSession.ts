@@ -498,7 +498,7 @@ export function useGameSession({
                 emitStatusRef.current({
                     connected: false,
                     connecting: false,
-                    error: previousError || "Conexion cerrada.",
+                    error: previousError || "Conexión cerrada. Intentando reconectar automáticamente...",
                 });
             }
         };
