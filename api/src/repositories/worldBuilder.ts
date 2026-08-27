@@ -1,4 +1,7 @@
 import crypto from "crypto";
+import { existsSync } from "fs";
+import fs from "fs/promises";
+import path from "path";
 import { z } from "zod";
 import pool from "../db";
 import { validatePngUpload } from "../lib/pngValidation";
@@ -11,6 +14,18 @@ export const UPLOADED_GRAPHIC_INDEX_START = 1_000_000;
 
 /** Los mapas del juego son de 100x100. */
 export const MAP_SIZE = 100;
+
+/** Un tile admite un objeto y un NPC, como el modelo del juego. */
+export const TILE_ENTITY_KINDS = ["obj", "npc"] as const;
+
+export type TileEntityKind = (typeof TILE_ENTITY_KINDS)[number];
+
+export type TileEntityPlacement = {
+    x: number;
+    y: number;
+    kind: TileEntityKind;
+    entityId: number;
+};
 
 export type UploadedGraphic = {
     grhIndex: number;
@@ -192,6 +207,13 @@ export const paintTilesSchema = z.object({
     tiles: z.array(tilePaintSchema).min(1).max(500),
 });
 
+export const tileEntitySchema = z.object({
+    x: z.coerce.number().int().min(1).max(MAP_SIZE),
+    y: z.coerce.number().int().min(1).max(MAP_SIZE),
+    kind: z.enum(TILE_ENTITY_KINDS),
+    entityId: z.coerce.number().int().positive(),
+});
+
 export type TilePaint = z.infer<typeof tilePaintSchema>;
 
 export type MapTileOverride = {
@@ -200,6 +222,10 @@ export type MapTileOverride = {
     layer: number;
     grhIndex: number | null;
     blocked: boolean | null;
+    status: "draft" | "published";
+};
+
+export type MapTileEntity = TileEntityPlacement & {
     status: "draft" | "published";
 };
 
@@ -311,11 +337,122 @@ export async function listMapOverrides(
     }));
 }
 
+/**
+ * Coloca un objeto o un NPC en un tile como BORRADOR.
+ *
+ * El id referenciado tiene que existir en la tabla correspondiente, igual que
+ * un grafico referenciado tiene que existir antes de pintarlo.
+ */
+export async function placeTileEntity(
+    mapNum: number,
+    placement: TileEntityPlacement,
+    accountId: string,
+): Promise<{ placed: boolean }> {
+    const client = await pool.connect();
+
+    try {
+        await client.query("BEGIN");
+
+        const kind = placement.kind;
+        const tableName = kind === "obj" ? "game_objects" : "game_npcs";
+        const exists = await client.query(
+            `SELECT 1 FROM ${tableName} WHERE id = $1 LIMIT 1`,
+            [placement.entityId],
+        );
+
+        if (exists.rowCount === 0) {
+            throw new Error(
+                `El ${kind === "obj" ? "objeto" : "NPC"} ${placement.entityId} no existe.`,
+            );
+        }
+
+        await client.query(
+            `INSERT INTO game_map_tile_entities
+                 (map_num, x, y, kind, entity_id, status, updated_by_account_id, updated_at)
+             VALUES ($1, $2, $3, $4, $5, 'draft', $6, NOW())
+             ON CONFLICT (map_num, x, y, kind, status) DO UPDATE
+             SET entity_id = EXCLUDED.entity_id,
+                 updated_by_account_id = EXCLUDED.updated_by_account_id,
+                 updated_at = NOW()`,
+            [
+                mapNum,
+                placement.x,
+                placement.y,
+                kind,
+                placement.entityId,
+                accountId,
+            ],
+        );
+
+        await client.query("COMMIT");
+
+        return { placed: true };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+/** Quita el objeto o NPC colocado en un tile (borrador). */
+export async function removeTileEntity(
+    mapNum: number,
+    x: number,
+    y: number,
+    kind: TileEntityKind,
+): Promise<boolean> {
+    const result = await pool.query(
+        `DELETE FROM game_map_tile_entities
+         WHERE map_num = $1 AND x = $2 AND y = $3 AND kind = $4 AND status = 'draft'`,
+        [mapNum, x, y, kind],
+    );
+
+    return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Entidades de un mapa.
+ *
+ * Misma regla que los tiles: un jugador comun recibe solo lo publicado y un
+ * admin recibe ademas sus borradores, con el borrador pisando a lo publicado.
+ */
+export async function listMapTileEntities(
+    mapNum: number,
+    includeDrafts = false,
+): Promise<MapTileEntity[]> {
+    const query = includeDrafts
+        ? `SELECT DISTINCT ON (x, y, kind) x, y, kind, entity_id, status
+           FROM game_map_tile_entities
+           WHERE map_num = $1
+           ORDER BY x, y, kind, status ASC`
+        : `SELECT x, y, kind, entity_id, status
+           FROM game_map_tile_entities
+           WHERE map_num = $1 AND status = 'published'
+           ORDER BY y, x, kind`;
+
+    const result = await pool.query<{
+        x: number;
+        y: number;
+        kind: string;
+        entity_id: number;
+        status: string;
+    }>(query, [mapNum]);
+
+    return result.rows.map((row) => ({
+        x: row.x,
+        y: row.y,
+        kind: row.kind as TileEntityKind,
+        entityId: row.entity_id,
+        status: row.status as "draft" | "published",
+    }));
+}
+
 /** Publica los borradores de un mapa: a partir de aca los ven los jugadores. */
 export async function publishMap(
     mapNum: number,
     accountId: string,
-): Promise<{ published: number }> {
+): Promise<{ published: number; publishedEntities: number }> {
     const client = await pool.connect();
 
     try {
@@ -340,9 +477,30 @@ export async function publishMap(
             [mapNum],
         );
 
+        const entitiesResult = await client.query(
+            `INSERT INTO game_map_tile_entities
+                 (map_num, x, y, kind, entity_id, status, updated_by_account_id, updated_at)
+             SELECT map_num, x, y, kind, entity_id, 'published', $2, NOW()
+             FROM game_map_tile_entities
+             WHERE map_num = $1 AND status = 'draft'
+             ON CONFLICT (map_num, x, y, kind, status) DO UPDATE
+             SET entity_id = EXCLUDED.entity_id,
+                 updated_by_account_id = EXCLUDED.updated_by_account_id,
+                 updated_at = NOW()`,
+            [mapNum, accountId],
+        );
+
+        await client.query(
+            `DELETE FROM game_map_tile_entities WHERE map_num = $1 AND status = 'draft'`,
+            [mapNum],
+        );
+
         await client.query("COMMIT");
 
-        return { published: result.rowCount ?? 0 };
+        return {
+            published: result.rowCount ?? 0,
+            publishedEntities: entitiesResult.rowCount ?? 0,
+        };
     } catch (error) {
         await client.query("ROLLBACK");
         throw error;
@@ -354,13 +512,21 @@ export async function publishMap(
 /** Descarta los borradores sin tocar lo que ya esta publicado. */
 export async function discardDrafts(
     mapNum: number,
-): Promise<{ discarded: number }> {
+): Promise<{ discarded: number; discardedEntities: number }> {
     const result = await pool.query(
         `DELETE FROM game_map_tile_overrides WHERE map_num = $1 AND status = 'draft'`,
         [mapNum],
     );
 
-    return { discarded: result.rowCount ?? 0 };
+    const entitiesResult = await pool.query(
+        `DELETE FROM game_map_tile_entities WHERE map_num = $1 AND status = 'draft'`,
+        [mapNum],
+    );
+
+    return {
+        discarded: result.rowCount ?? 0,
+        discardedEntities: entitiesResult.rowCount ?? 0,
+    };
 }
 
 /**
@@ -369,20 +535,30 @@ export async function discardDrafts(
  */
 export async function revertMap(
     mapNum: number,
-): Promise<{ reverted: number }> {
+): Promise<{ reverted: number; revertedEntities: number }> {
     const result = await pool.query(
         `DELETE FROM game_map_tile_overrides WHERE map_num = $1`,
         [mapNum],
     );
 
-    return { reverted: result.rowCount ?? 0 };
+    const entitiesResult = await pool.query(
+        `DELETE FROM game_map_tile_entities WHERE map_num = $1`,
+        [mapNum],
+    );
+
+    return {
+        reverted: result.rowCount ?? 0,
+        revertedEntities: entitiesResult.rowCount ?? 0,
+    };
 }
 
-/** Cuantos tiles tiene el mapa en cada estado, para mostrar en la UI. */
+/** Cuantos tiles y entidades tiene el mapa en cada estado, para mostrar en la UI. */
 export async function getMapStatus(mapNum: number): Promise<{
     mapNum: number;
     draft: number;
     published: number;
+    draftEntities: number;
+    publishedEntities: number;
 }> {
     const result = await pool.query<{ status: string; count: string }>(
         `SELECT status, COUNT(*)::text AS count
@@ -392,14 +568,27 @@ export async function getMapStatus(mapNum: number): Promise<{
         [mapNum],
     );
 
+    const entitiesResult = await pool.query<{ status: string; count: string }>(
+        `SELECT status, COUNT(*)::text AS count
+         FROM game_map_tile_entities
+         WHERE map_num = $1
+         GROUP BY status`,
+        [mapNum],
+    );
+
     const counts = new Map(
         result.rows.map((row) => [row.status, Number(row.count)]),
+    );
+    const entityCounts = new Map(
+        entitiesResult.rows.map((row) => [row.status, Number(row.count)]),
     );
 
     return {
         mapNum,
         draft: counts.get("draft") ?? 0,
         published: counts.get("published") ?? 0,
+        draftEntities: entityCounts.get("draft") ?? 0,
+        publishedEntities: entityCounts.get("published") ?? 0,
     };
 }
 
@@ -416,4 +605,101 @@ export async function clearTile(
     );
 
     return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Ruta al directorio fuente de un mapa dentro del proyecto.
+ *
+ * Los mapas editables viven como archivos (terrain.json con paleta + filas,
+ * specials.json, npcs.json, meta.json) y la API los re-exporta para el
+ * frontend. Si la copia fuente no existe, el mapa no es editable.
+ */
+function resolveMapsSourceDir(): string {
+    const candidates = [
+        path.resolve(__dirname, ".."),
+        path.resolve(__dirname, "..", "..", "src"),
+    ];
+
+    for (const candidate of candidates) {
+        if (existsSync(path.join(candidate, "mapas_source"))) {
+            return path.join(candidate, "mapas_source");
+        }
+    }
+
+    return path.join(candidates[0], "mapas_source");
+}
+
+export type TerrainPaletteEntry = {
+    id: number;
+    graphics: Array<number | null>;
+    blocked: boolean;
+};
+
+/** Cuantos graficos subidos entran en la paleta del editor. */
+const MAX_PALETTE_UPLOADED_GRAPHICS = 500;
+
+export type TerrainPaletteResult = {
+    mapNum: number;
+    palette: TerrainPaletteEntry[];
+    uploadedGraphics: UploadedGraphic[];
+};
+
+/**
+ * Paleta de tiles del mapa actual.
+ *
+ * Cada entrada es un tile de la paleta del mapa fuente (terrain.json), con los
+ * graficos de sus capas y si bloquea. Los graficos subidos por administradores
+ * se suman al final: son tiles disponibles para pintar igual que los
+ * originales, con la diferencia de que cada imagen es un tile completo.
+ */
+export async function getMapTerrainPalette(
+    mapNum: number,
+): Promise<TerrainPaletteResult> {
+    const mapsSourceDir = resolveMapsSourceDir();
+    const terrainPath = path.join(
+        mapsSourceDir,
+        `mapa_${mapNum}`,
+        "terrain.json",
+    );
+
+    if (!existsSync(terrainPath)) {
+        throw new Error(`El mapa ${mapNum} no tiene paleta fuente.`);
+    }
+
+    const terrain = JSON.parse(await fs.readFile(terrainPath, "utf8")) as {
+        palette?: Record<string, { blocked?: boolean; graphics?: unknown }>;
+    };
+
+    const palette: TerrainPaletteEntry[] = [];
+
+    for (const [id, entry] of Object.entries(terrain.palette ?? {})) {
+        const parsedId = Number.parseInt(id, 10);
+
+        if (!Number.isInteger(parsedId) || parsedId <= 0) {
+            continue;
+        }
+
+        const rawGraphics = Array.isArray(entry.graphics)
+            ? entry.graphics
+            : [entry.graphics];
+        const graphics = rawGraphics.map((grh) => {
+            const parsed = Number(grh);
+
+            return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+        });
+
+        palette.push({
+            id: parsedId,
+            graphics,
+            blocked: Boolean(entry.blocked),
+        });
+    }
+
+    palette.sort((left, right) => left.id - right.id);
+
+    return {
+        mapNum,
+        palette,
+        uploadedGraphics: await listGraphics(MAX_PALETTE_UPLOADED_GRAPHICS),
+    };
 }

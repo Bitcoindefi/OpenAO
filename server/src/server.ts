@@ -4,6 +4,7 @@ import type { NpcsApi } from "./npcs";
 import type { PackageApi, PacketPayload } from "./package";
 import type { ProtocolApi } from "./protocol";
 import type { SocketApi } from "./socket";
+import { createGracefulShutdown } from "./gracefulShutdown";
 import type {
     RuntimeCharacter,
     RuntimeCharacters,
@@ -30,6 +31,8 @@ const FLOOR_ITEM_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 const FLOOR_ITEM_SWEEP_WARNING_MS = 60 * 1000;
 const FLOOR_ITEM_SWEEP_CHECK_MS = 5000;
 const DUPLICATE_IP_IDLE_TIMEOUT_MS = 60 * 1000;
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5000;
+const SHUTDOWN_CLIENT_MESSAGE = "El servidor se está reiniciando. Podrás volver a entrar en breve.";
 
 function broadcastNpcSnapshot(game: GameApi, handleProtocol: HandleProtocolApi, npc: RuntimeNpc | undefined): void {
     if (!npc) {
@@ -77,6 +80,7 @@ function broadcastCharacterSnapshot(
 
 type WSServer = {
     on: (event: "connection", listener: (client: RuntimeClient, request: RuntimeConnectionRequest) => void) => void;
+    close: () => void;
 };
 
 type ServerCharacter = RuntimeCharacter & {
@@ -199,6 +203,63 @@ function handleHttpRequest(request: any, response: any) {
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     response.end(JSON.stringify({ error: "Not found" }));
 }
+
+const gracefulShutdown = createGracefulShutdown({
+    timeoutMs: GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+    stopAcceptingConnections() {
+        vars.serverReady = false;
+
+        if (httpServer.listening) {
+            httpServer.close();
+        }
+
+        wsServer?.close();
+    },
+    notifyClients(signal) {
+        handleProtocol.consoleToAll(`[Servidor] ${SHUTDOWN_CLIENT_MESSAGE} (${signal})`, "#E69500", 1, 0);
+
+        for (const client of Object.values(vars.clients as Record<string, RuntimeClient | undefined>)) {
+            socket.flushClient(client);
+        }
+    },
+    async resetConnectedCharacters() {
+        const response = (await funct.fetchUrl("/internal/characters/reset-connected", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: vars.tokenAuth,
+            },
+        })) as { updated?: number };
+
+        return Number(response.updated ?? 0);
+    },
+    closeClients() {
+        for (const client of Object.values(vars.clients as Record<string, RuntimeClient | undefined>)) {
+            if (client && client.readyState === client.OPEN) {
+                socket.flushClient(client);
+                client.close(1001, SHUTDOWN_CLIENT_MESSAGE);
+            }
+        }
+    },
+    exit(code) {
+        process.exit(code);
+    },
+    onInfo(message) {
+        console.log(message);
+    },
+    onError(step, error) {
+        console.error(`[Servidor] Error al ${step} durante el apagado.`);
+        funct.dumpError(error);
+    },
+});
+
+process.once("SIGINT", () => {
+    void gracefulShutdown.run("SIGINT");
+});
+
+process.once("SIGTERM", () => {
+    void gracefulShutdown.run("SIGTERM");
+});
 
 const PACKET_TYPE_NAMES: Record<number, string> = {
     [pkg.serverPacketID.changeHeading]: "heading",
@@ -455,6 +516,10 @@ function trackClientActivity(ws: RuntimeClient, packageID: number) {
         LoadCraftingRecipes.initialize(),
         LoadSmeltingRecipes.initialize(),
     ]);
+
+    if (gracefulShutdown.hasStarted()) {
+        return;
+    }
 
     vars.serverReady = true;
     const endInitialize = Date.now() - startInitialize;
