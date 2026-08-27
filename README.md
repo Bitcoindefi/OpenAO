@@ -69,8 +69,21 @@ Lo que sigue es para levantar el proyecto localmente.
 
 ### 1. Levantar La Base De Datos
 
-El dump inicial del juego esta en `database/aoweb.sql`.
+El dump inicial del juego está en `database/aoweb.sql`.
 
+#### Opción A: Docker Compose con persistencia de datos (Recomendado)
+Para persistir los datos de forma permanente entre reinicios:
+```bash
+docker compose -f api/docker-compose.postgres.yml up -d
+```
+> **Nota de volumen en PostgreSQL 18+**: Las imágenes `postgres:18-alpine` montan el volumen en `/var/lib/postgresql` para compatibilidad con clusters.
+
+Restaurar la base:
+```bash
+docker exec -i aoweb-postgres psql -U postgres -d aoweb < database/aoweb.sql
+```
+
+#### Opción B: Contenedor efímero simple
 Desde la carpeta padre del proyecto:
 
 ```bash
