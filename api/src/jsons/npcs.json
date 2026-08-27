@@ -1,0 +1,23 @@
+{
+  "1": {
+    "name": "Comerciante de Armas",
+    "npcType": 10,
+    "idHead": 1,
+    "idBody": 1,
+    "movement": 0,
+    "objs": [
+      { "item": 1, "cant": 50 },
+      { "item": 2, "cant": 50 }
+    ],
+    "drop": []
+  },
+  "2": {
+    "name": "Sacerdote",
+    "npcType": 2,
+    "idHead": 2,
+    "idBody": 2,
+    "movement": 0,
+    "objs": [],
+    "drop": []
+  }
+}

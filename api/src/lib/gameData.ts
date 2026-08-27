@@ -250,12 +250,18 @@ export function loadSeedNpcsJson(): Array<{
     data: GameNpcRecordData;
 }> {
     const filePath = resolveSeedJsonPath("npcs.json", "npcs.compact.json");
+    if (!fs.existsSync(filePath)) {
+        return [];
+    }
     return loadNpcsJsonFromFile(filePath);
 }
 
 export function loadNpcsJsonFromFile(
     filePath: string,
 ): Array<{ id: number; data: GameNpcRecordData }> {
+    if (!fs.existsSync(filePath)) {
+        return [];
+    }
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as NpcsById;
     return Object.entries(raw)
         .map(([id, data]) => ({ id: Number(id), data: normalizeNpcData(data) }))
