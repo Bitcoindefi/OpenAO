@@ -806,14 +806,18 @@ async function applyMapOverrides(
                 continue;
             }
 
-            if (override.grhIndex != null) {
-                const graphics = (tile.graphics ?? {}) as Record<
-                    string,
-                    number
-                >;
+            const graphics = (tile.graphics ?? {}) as Record<string, number>;
+
+            if (override.grhIndex == null) {
+                // Un grafico nulo es "esta capa quedo vacia", no "sin cambios":
+                // el editor lo usa para borrar, y si no se aplicara el jugador
+                // seguiria viendo el arbol que el admin ya saco.
+                delete graphics[String(override.layer)];
+            } else {
                 graphics[String(override.layer)] = override.grhIndex;
-                tile.graphics = graphics;
             }
+
+            tile.graphics = graphics;
 
             if (override.blocked != null) {
                 // El cliente representa el bloqueo como numero (1 / 0), no como

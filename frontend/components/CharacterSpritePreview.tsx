@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
     Application,
-    Assets,
     Container,
     Rectangle,
     Sprite,
@@ -11,13 +10,11 @@ import {
 } from "pixi.js";
 import type {
     BodiesDB,
-    DirectionalGraphicData,
     GraphicsDB,
     HeadsDB,
     HelmetsDB,
     ShieldsDB,
     WeaponsDB,
-    GraphicData,
 } from "../types/game";
 import {
     loadBodiesDB,
@@ -27,6 +24,11 @@ import {
     loadShieldsDB,
     loadWeaponsDB,
 } from "../utils/gameLoader";
+import {
+    loadGraphicTexture,
+    resolveDirectionalGraphicFrame,
+    resolveGraphicFrame,
+} from "../lib/graphicTextures";
 
 type CharacterSpritePreviewProps = {
     bodyId: number;
@@ -49,20 +51,11 @@ const VIEW_HEIGHT = 138;
 const HEAD_VIEW_WIDTH = 72;
 const HEAD_VIEW_HEIGHT = 72;
 const FRONT_DIRECTION = "2";
-const baseTexturePromiseCache = new Map<string, Promise<Texture>>();
 
 function roundToEven(value: number) {
     const rounded = Math.round(value);
 
     return rounded % 2 === 0 ? rounded : rounded + 1;
-}
-
-function getGraphicImagePaths(imageFile: string | number) {
-    return [
-        `/graphics/${imageFile}.png`,
-        `/static/graphics/${imageFile}.png`,
-        `/static/graficosbk/${imageFile}.png`,
-    ];
 }
 
 function getBodySpritePosition(width: number, height: number): SpritePosition {
@@ -120,96 +113,6 @@ function getHelmetSpritePosition(
         x: basePosition.x + helmetOffsetX,
         y: basePosition.y + helmetOffsetY,
     };
-}
-
-function resolveGraphicFrame(
-    graphicsDB: GraphicsDB,
-    graphicId: number,
-    direction: string,
-) {
-    const graphic = graphicsDB[graphicId.toString()];
-
-    if (!graphic) {
-        return null;
-    }
-
-    if (graphic.numFile && graphic.numFrames <= 1) {
-        return graphic;
-    }
-
-    const frameId =
-        (graphic.numFrames > 1 ? graphic.frames?.["1"] : undefined) ??
-        graphic.frames?.[direction] ??
-        graphic.frames?.["1"] ??
-        Object.values(graphic.frames ?? {})[0];
-
-    if (!frameId) {
-        return null;
-    }
-
-    return graphicsDB[frameId.toString()] ?? null;
-}
-
-function resolveDirectionalGraphicFrame(
-    graphicsDB: GraphicsDB,
-    directionalData: DirectionalGraphicData | undefined,
-    direction: string,
-) {
-    if (!directionalData) {
-        return null;
-    }
-
-    const graphicId =
-        directionalData[direction as keyof DirectionalGraphicData];
-
-    if (!graphicId) {
-        return null;
-    }
-
-    return resolveGraphicFrame(graphicsDB, graphicId, direction);
-}
-
-async function loadBaseTexture(imageFile: string | number): Promise<Texture> {
-    const candidatePaths = getGraphicImagePaths(imageFile);
-    const cacheKey = candidatePaths.join("|");
-    const cachedPromise = baseTexturePromiseCache.get(cacheKey);
-
-    if (cachedPromise) {
-        return cachedPromise;
-    }
-
-    const loadPromise = (async () => {
-        let lastError: unknown;
-
-        for (const candidatePath of candidatePaths) {
-            try {
-                const texture = await Assets.load(candidatePath);
-                texture.source.scaleMode = "nearest";
-                return texture;
-            } catch (error) {
-                lastError = error;
-            }
-        }
-
-        throw lastError ?? new Error("Failed to load base texture");
-    })();
-
-    baseTexturePromiseCache.set(cacheKey, loadPromise);
-    return loadPromise;
-}
-
-async function loadGraphicTexture(graphicData: GraphicData): Promise<Texture> {
-    const baseTexture = await loadBaseTexture(graphicData.numFile);
-
-    return new Texture({
-        source: baseTexture.source,
-        frame: new Rectangle(
-            graphicData.sX,
-            graphicData.sY,
-            graphicData.width,
-            graphicData.height,
-        ),
-    });
 }
 
 function getVisibleAlphaBounds(
