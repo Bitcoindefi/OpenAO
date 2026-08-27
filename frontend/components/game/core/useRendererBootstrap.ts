@@ -780,7 +780,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: options.fpsDisplayTextRef.current,
                     style: fpsStyle,
                 });
-                fpsText.resolution = 1;
+                fpsText.resolution = app.renderer.resolution;
                 fpsText.x = 10;
                 fpsText.y = 8;
                 fpsText.zIndex = 1000;
@@ -790,7 +790,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: options.pingDisplayTextRef.current,
                     style: fpsStyle,
                 });
-                pingText.resolution = 1;
+                pingText.resolution = app.renderer.resolution;
                 pingText.x = 10;
                 pingText.y = 22;
                 pingText.zIndex = 1000;
@@ -800,7 +800,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: "",
                     style: getHudStatusTextStyle(0xff3b30),
                 });
-                seguroText.resolution = 1;
+                seguroText.resolution = app.renderer.resolution;
                 seguroText.x = 10;
                 seguroText.y = 36;
                 seguroText.zIndex = 1000;
@@ -810,7 +810,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: "",
                     style: getHudStatusTextStyle(0xff3b30),
                 });
-                clanSeguroText.resolution = 1;
+                clanSeguroText.resolution = app.renderer.resolution;
                 clanSeguroText.x = 10;
                 clanSeguroText.y = 50;
                 clanSeguroText.zIndex = 1000;
@@ -825,12 +825,14 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                         stroke: { color: 0x000000, width: 1.5 },
                     }),
                 });
-                debugCombatText.resolution = 1;
+                debugCombatText.resolution = app.renderer.resolution;
                 debugCombatText.x = 10;
                 debugCombatText.y = 50;
                 debugCombatText.zIndex = 1000;
                 debugCombatText.visible = false;
                 app.stage.addChild(debugCombatText);
+
+                app.ticker.maxFPS = 60;
 
                 (engine as any).fpsText = fpsText;
                 options.pingTextRef.current = pingText;

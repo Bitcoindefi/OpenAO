@@ -1,28 +1,21 @@
-import type { MetadataRoute } from "next";
-import { siteDescription, siteName } from "@/lib/seo";
+import { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
-    return {
-        name: siteName,
-        short_name: siteName,
-        description: siteDescription,
-        start_url: "/",
-        display: "standalone",
-        background_color: "#08111f",
-        theme_color: "#08111f",
-        lang: "es-AR",
-        categories: ["games", "entertainment"],
-        icons: [
-            {
-                src: "/favicon.ico",
-                sizes: "any",
-                type: "image/x-icon",
-            },
-            {
-                src: "/static/imgs/logo-aoweb.png",
-                sizes: "512x512",
-                type: "image/png",
-            },
-        ],
-    };
+  return {
+    name: "OpenAO - Argentum Online Web",
+    short_name: "OpenAO",
+    description: "Argentum Online clásico en el navegador y móviles",
+    start_url: "/play",
+    display: "fullscreen",
+    orientation: "landscape",
+    background_color: "#020617",
+    theme_color: "#0f172a",
+    icons: [
+      {
+        src: "/favicon.ico",
+        sizes: "any",
+        type: "image/x-icon"
+      }
+    ]
+  };
 }
