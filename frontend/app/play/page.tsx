@@ -96,6 +96,9 @@ const LOGOUT_CANCELLED_PATTERN = /^\[Servidor\] La salida se canceló porque /;
 const LOGOUT_DENIED_PATTERN = /^\[Servidor\] No puedes salir /;
 const LOGOUT_CLOSING_MESSAGE = "[Servidor] Cerrando sesión...";
 const LOGOUT_DELAY_MS = 10000;
+const RECONNECT_MAX_ATTEMPTS = 5;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 15000;
 const CHALLENGE_INSTANCE_MAP_START = 2000;
 const RETOS_INFO_MESSAGES = new Set([
     "[Retos] Reto publicado.",
@@ -182,6 +185,7 @@ type RendererStatus = {
     worldName?: string;
     error?: string;
     consoleLine?: string;
+    reconnectable?: boolean;
 };
 
 type ConnectionForm = {
@@ -195,6 +199,34 @@ type GameTicketResponse = {
     ticket: string;
     expiresAt: string;
 };
+
+type ReconnectMode =
+    | "idle"
+    | "scheduled"
+    | "running"
+    | "exhausted"
+    | "cancelled";
+
+type ReconnectState = {
+    mode: ReconnectMode;
+    attempt: number;
+    scheduledAt: number | null;
+};
+
+function createIdleReconnectState(): ReconnectState {
+    return {
+        mode: "idle",
+        attempt: 0,
+        scheduledAt: null,
+    };
+}
+
+function getReconnectDelayMs(attempt: number): number {
+    return Math.min(
+        RECONNECT_MAX_DELAY_MS,
+        RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1),
+    );
+}
 
 type MeasuredHudSize = {
     width: number;
@@ -695,6 +727,9 @@ function HomeContent() {
     const [connectionSeed, setConnectionSeed] = useState(0);
     const [activeConnection, setActiveConnection] =
         useState<ConnectionForm | null>(null);
+    const [reconnectState, setReconnectState] = useState<ReconnectState>(
+        createIdleReconnectState,
+    );
     const [hud, setHud] = useState<PlayerHudState | null>(null);
     const [equipRequest, setEquipRequest] = useState<EquipRequest | null>(null);
     const [useItemClickRequest, setUseItemClickRequest] =
@@ -899,6 +934,7 @@ function HomeContent() {
         useState<HTMLDivElement | null>(null);
     const fullscreenPromptWasEvaluatedRef = useRef(false);
     const statusRef = useRef(status);
+    const reconnectStateRef = useRef(reconnectState);
     const hudRef = useRef(hud);
     const selectedMapRef = useRef(selectedMap);
     const selectedCharacterRef = useRef(selectedCharacter ?? null);
@@ -929,6 +965,10 @@ function HomeContent() {
     useEffect(() => {
         statusRef.current = status;
     }, [status]);
+
+    useEffect(() => {
+        reconnectStateRef.current = reconnectState;
+    }, [reconnectState]);
 
     useEffect(() => {
         hudRef.current = hud;
@@ -976,6 +1016,103 @@ function HomeContent() {
             idChar: activeConnection.idChar ?? 0,
         };
     }, [activeConnection, connectionSeed]);
+
+    const buildFreshConnection = useCallback(async (): Promise<ConnectionForm> => {
+        if (arenaMode && arenaRoomId) {
+            const roomResponse = await fetch(`/api/arenas/rooms/${arenaRoomId}`, {
+                cache: "no-store",
+            });
+            const roomResult = (await roomResponse.json()) as
+                | ArenaRoomDetails
+                | AuthErrorResponse;
+
+            if (!roomResponse.ok || "error" in roomResult) {
+                throw new Error(
+                    "error" in roomResult
+                        ? roomResult.error
+                        : "No se pudo recuperar la sala",
+                );
+            }
+
+            const templateId = roomResult.member?.selectedPvpTemplateId;
+
+            if (templateId === null || templateId === undefined) {
+                throw new Error("Elegí una clase para reconectar a la arena.");
+            }
+
+            const ticketResponse = await fetch(
+                `/api/arenas/rooms/${arenaRoomId}/select-template`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ templateId }),
+                },
+            );
+            const ticketResult = (await ticketResponse.json()) as
+                | ArenaGameTicketResponse
+                | AuthErrorResponse;
+
+            if (!ticketResponse.ok || "error" in ticketResult) {
+                throw new Error(
+                    "error" in ticketResult
+                        ? ticketResult.error
+                        : "No se pudo regenerar el ticket de arena",
+                );
+            }
+
+            return {
+                wsUrl: form.wsUrl,
+                ticket: ticketResult.ticket,
+                typeGame: 2,
+                idChar: templateId,
+            };
+        }
+
+        if (arenaMode && arenaTicket) {
+            return {
+                wsUrl: form.wsUrl,
+                ticket: arenaTicket,
+                typeGame: 2,
+                idChar: Number.isFinite(arenaTemplateId)
+                    ? arenaTemplateId
+                    : 0,
+            };
+        }
+
+        if (!authSession?.selectedCharacterId) {
+            throw new Error("No hay personaje seleccionado para reconectar.");
+        }
+
+        const response = await fetch("/api/auth/game-ticket", {
+            method: "POST",
+        });
+
+        const result = (await response.json()) as
+            | GameTicketResponse
+            | AuthErrorResponse;
+
+        if (!response.ok || "error" in result) {
+            throw new Error(
+                "error" in result
+                    ? result.error
+                    : "No se pudo crear el ticket de juego",
+            );
+        }
+
+        return {
+            wsUrl: form.wsUrl,
+            ticket: result.ticket,
+        };
+    }, [
+        arenaMode,
+        arenaRoomId,
+        arenaTemplateId,
+        arenaTicket,
+        authSession?.selectedCharacterId,
+        form.wsUrl,
+    ]);
 
     const sendChatMessage = useCallback(
         (message: string) => {
@@ -1626,6 +1763,7 @@ function HomeContent() {
 
     const resetConnectionState = useCallback(() => {
         autoConnectKeyRef.current = null;
+        setReconnectState(createIdleReconnectState());
         setLogoutPending(false);
         setLogoutDeadline(null);
         setLogoutSecondsRemaining(0);
@@ -1945,6 +2083,238 @@ function HomeContent() {
         switchCharacterHref,
     ]);
 
+    useEffect(() => {
+        if (status.connected) {
+            setReconnectState(createIdleReconnectState());
+            return;
+        }
+
+        if (
+            status.connecting ||
+            !status.reconnectable ||
+            !activeConnection ||
+            logoutPending
+        ) {
+            return;
+        }
+
+        setReconnectState((current) => {
+            if (current.mode === "idle") {
+                return {
+                    mode: "scheduled",
+                    attempt: 1,
+                    scheduledAt: Date.now() + getReconnectDelayMs(1),
+                };
+            }
+
+            if (current.mode === "running") {
+                const nextAttempt = current.attempt + 1;
+
+                if (nextAttempt > RECONNECT_MAX_ATTEMPTS) {
+                    return {
+                        mode: "exhausted",
+                        attempt: current.attempt,
+                        scheduledAt: null,
+                    };
+                }
+
+                return {
+                    mode: "scheduled",
+                    attempt: nextAttempt,
+                    scheduledAt:
+                        Date.now() + getReconnectDelayMs(nextAttempt),
+                };
+            }
+
+            return current;
+        });
+    }, [
+        activeConnection,
+        logoutPending,
+        status.connected,
+        status.connecting,
+        status.reconnectable,
+    ]);
+
+    useEffect(() => {
+        if (reconnectState.mode === "scheduled") {
+            const remainingMs = Math.max(
+                0,
+                (reconnectState.scheduledAt ?? Date.now()) - Date.now(),
+            );
+            setStatus((current) => ({
+                ...current,
+                connected: false,
+                connecting: false,
+                reconnectable: true,
+                error: `Conexion perdida. Reintentando en ${Math.ceil(
+                    remainingMs / 1000,
+                )}s (${reconnectState.attempt}/${RECONNECT_MAX_ATTEMPTS}).`,
+            }));
+            return;
+        }
+
+        if (reconnectState.mode === "running") {
+            setStatus((current) => ({
+                ...current,
+                connected: false,
+                connecting: true,
+                reconnectable: true,
+                error: `Reconectando... (${reconnectState.attempt}/${RECONNECT_MAX_ATTEMPTS})`,
+            }));
+            return;
+        }
+
+        if (reconnectState.mode === "exhausted") {
+            setStatus((current) => ({
+                ...current,
+                connected: false,
+                connecting: false,
+                reconnectable: true,
+                error: "No se pudo reconectar automaticamente. Usa Reconectar para intentar de nuevo.",
+            }));
+        }
+    }, [reconnectState]);
+
+    useEffect(() => {
+        if (
+            reconnectState.mode !== "scheduled" ||
+            reconnectState.scheduledAt === null
+        ) {
+            return;
+        }
+
+        const attempt = reconnectState.attempt;
+        const timeoutId = window.setTimeout(() => {
+            setReconnectState((current) =>
+                current.mode === "scheduled" && current.attempt === attempt
+                    ? {
+                          mode: "running",
+                          attempt,
+                          scheduledAt: null,
+                      }
+                    : current,
+            );
+
+            void buildFreshConnection()
+                .then((nextConnection) => {
+                    setForm((current) => ({
+                        ...current,
+                        wsUrl: nextConnection.wsUrl,
+                        ticket: nextConnection.ticket,
+                    }));
+                    setConnectionSeed((current) => current + 1);
+                    setActiveConnection(nextConnection);
+                })
+                .catch((error) => {
+                    const nextAttempt = attempt + 1;
+
+                    if (nextAttempt > RECONNECT_MAX_ATTEMPTS) {
+                        setReconnectState({
+                            mode: "exhausted",
+                            attempt,
+                            scheduledAt: null,
+                        });
+                        setStatus((current) => ({
+                            ...current,
+                            connected: false,
+                            connecting: false,
+                            reconnectable: true,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : "No se pudo reconectar.",
+                        }));
+                        return;
+                    }
+
+                    setReconnectState({
+                        mode: "scheduled",
+                        attempt: nextAttempt,
+                        scheduledAt:
+                            Date.now() + getReconnectDelayMs(nextAttempt),
+                    });
+                });
+        }, Math.max(0, reconnectState.scheduledAt - Date.now()));
+
+        return () => window.clearTimeout(timeoutId);
+    }, [buildFreshConnection, reconnectState]);
+
+    useEffect(() => {
+        const requestImmediateReconnect = () => {
+            if (
+                document.visibilityState !== "visible" ||
+                statusRef.current.connected ||
+                statusRef.current.connecting ||
+                !statusRef.current.reconnectable
+            ) {
+                return;
+            }
+
+            const current = reconnectStateRef.current;
+            if (
+                current.mode !== "scheduled" &&
+                current.mode !== "exhausted" &&
+                current.mode !== "cancelled"
+            ) {
+                return;
+            }
+
+            setReconnectState({
+                mode: "scheduled",
+                attempt:
+                    current.mode === "exhausted" || current.mode === "cancelled"
+                        ? 1
+                        : current.attempt,
+                scheduledAt: Date.now(),
+            });
+        };
+
+        document.addEventListener(
+            "visibilitychange",
+            requestImmediateReconnect,
+        );
+        window.addEventListener("pageshow", requestImmediateReconnect);
+        return () => {
+            document.removeEventListener(
+                "visibilitychange",
+                requestImmediateReconnect,
+            );
+            window.removeEventListener("pageshow", requestImmediateReconnect);
+        };
+    }, []);
+
+    const handleReconnectNow = useCallback(() => {
+        if (!activeConnection) {
+            return;
+        }
+
+        const current = reconnectStateRef.current;
+        setReconnectState({
+            mode: "scheduled",
+            attempt:
+                current.mode === "exhausted" || current.mode === "cancelled"
+                    ? 1
+                    : Math.max(1, current.attempt || 1),
+            scheduledAt: Date.now(),
+        });
+    }, [activeConnection]);
+
+    const handleCancelReconnect = useCallback(() => {
+        setReconnectState({
+            mode: "cancelled",
+            attempt: 0,
+            scheduledAt: null,
+        });
+        setStatus((current) => ({
+            ...current,
+            connected: false,
+            connecting: false,
+            reconnectable: true,
+            error: "Reconexion cancelada. Usa Reconectar para intentar de nuevo.",
+        }));
+    }, []);
+
     const handleSwitchCharacterClick = useCallback(
         (event: React.MouseEvent<HTMLAnchorElement>) => {
             if (
@@ -1980,6 +2350,7 @@ function HomeContent() {
         setStatus((current) => ({
             ...current,
             ...nextStatus,
+            reconnectable: nextStatus.reconnectable ?? false,
             worldName: nextWorldName ?? current.worldName,
         }));
     }, []);
@@ -2626,6 +2997,14 @@ function HomeContent() {
             {fullscreenToggleButton}
         </div>
     );
+    const reconnectControlVisible = Boolean(
+        activeConnection &&
+            !status.connected &&
+            (status.reconnectable || reconnectState.mode !== "idle"),
+    );
+    const canCancelReconnect =
+        reconnectState.mode === "scheduled" || reconnectState.mode === "running";
+    const reconnectNowDisabled = reconnectState.mode === "running";
 
     return (
         <div
@@ -3792,7 +4171,30 @@ function HomeContent() {
 
             {status.error || fullscreenError ? (
                 <div className="fixed left-4 top-24 z-50 max-w-sm rounded-2xl bg-stone-950/88 px-4 py-3 text-sm text-rose-300 shadow-2xl backdrop-blur-md">
-                    {status.error || fullscreenError}
+                    <div>{status.error || fullscreenError}</div>
+                    {reconnectControlVisible ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={handleReconnectNow}
+                                disabled={reconnectNowDisabled}
+                                className="rounded-full border border-cyan-200/25 bg-cyan-300/12 px-3 py-1.5 text-xs font-semibold text-cyan-100 transition hover:border-cyan-200/45 hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-55"
+                            >
+                                {reconnectNowDisabled
+                                    ? "Reconectando..."
+                                    : "Reconectar ahora"}
+                            </button>
+                            {canCancelReconnect ? (
+                                <button
+                                    type="button"
+                                    onClick={handleCancelReconnect}
+                                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-stone-200 transition hover:border-white/20 hover:bg-white/10"
+                                >
+                                    Cancelar
+                                </button>
+                            ) : null}
+                        </div>
+                    ) : null}
                 </div>
             ) : null}
 

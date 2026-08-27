@@ -225,6 +225,7 @@ interface RendererStatus {
     worldName?: string;
     error?: string;
     consoleLine?: string;
+    reconnectable?: boolean;
 }
 
 type LoadingStage =

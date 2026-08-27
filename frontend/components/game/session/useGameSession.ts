@@ -484,6 +484,7 @@ export function useGameSession({
                 connected: false,
                 connecting: false,
                 error: "No se pudo establecer la conexion websocket.",
+                reconnectable: true,
             });
         };
 
@@ -499,6 +500,7 @@ export function useGameSession({
                     connected: false,
                     connecting: false,
                     error: previousError || "Conexion cerrada.",
+                    reconnectable: true,
                 });
             }
         };
