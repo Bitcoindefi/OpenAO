@@ -165,6 +165,16 @@ pnpm dev
 
 Abrir `http://localhost:3000`.
 
+> **Mapas del mundo:** el cliente lee los mapas desde `frontend/public/maps_optimized/`, que **no está en git** (ver `frontend/.gitignore`). Se generan desde `server/mapas_source/` con el script del server:
+>
+> ```bash
+> cd server
+> pnpm install
+> pnpm export-frontend-maps
+> ```
+>
+> Sin ese paso el mundo no se dibuja (404 en `/maps_optimized/mapa_*.json`) y `pnpm build` falla con un mensaje que indica qué correr. El build de Docker hace la generación solo (ver `frontend/Dockerfile`), así que con `docker compose build` desde `frontend/` alcanza.
+
 ## Arquitectura
 
 | Componente | Carpeta | Puerto |
