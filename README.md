@@ -165,6 +165,18 @@ pnpm dev
 
 Abrir `http://localhost:3000`.
 
+Para generar una build del frontend fuera de Docker, primero exportá los mapas optimizados que consume el cliente:
+
+```bash
+cd server
+pnpm install
+pnpm export-frontend-maps
+cd ../frontend
+pnpm build
+```
+
+Los `docker-compose*.yml` del frontend hacen este paso automáticamente durante la build de la imagen.
+
 ## Arquitectura
 
 | Componente | Carpeta | Puerto |

@@ -4,6 +4,7 @@
     "private": true,
     "scripts": {
         "dev": "next dev --turbopack --hostname 0.0.0.0",
+        "prebuild": "node ./scripts/verify-maps-optimized.mjs",
         "build": "next build",
         "start": "next start",
         "lint": "eslint",
