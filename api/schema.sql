@@ -625,5 +625,28 @@ $migracion$;
 
 CREATE INDEX IF NOT EXISTS idx_game_map_tile_overrides_map
     ON game_map_tile_overrides(map_num, status);
+
+-- Objetos y NPCs colocados en un tile respecto del mapa original.
+--
+-- Un tile tiene como maximo un objeto y un NPC, igual que el modelo del juego
+-- (tile.objInfo y tile.npcIndex). Viven en una tabla propia y no como capas de
+-- grafico porque no pertenecen a ninguna capa: pintar el piso no deberia
+-- borrar el objeto que hay encima, y viceversa.
+--
+-- kind 'obj' referencia game_objects y kind 'npc' referencia game_npcs.
+CREATE TABLE IF NOT EXISTS game_map_tile_entities (
+    map_num INTEGER NOT NULL CHECK (map_num > 0),
+    x INTEGER NOT NULL CHECK (x > 0),
+    y INTEGER NOT NULL CHECK (y > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('obj', 'npc')),
+    entity_id INTEGER NOT NULL CHECK (entity_id > 0),
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+    updated_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (map_num, x, y, kind, status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
+    ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
