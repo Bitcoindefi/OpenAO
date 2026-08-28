@@ -3065,4 +3065,93 @@ app.get("/user-online-stats", async (request, response) => {
     }
 });
 
+app.get("/internal/map-objects/:mapId", requireAuth, async (request, response) => {
+    try {
+        const mapId = Number(request.params.mapId);
+        const { getMapObjects } = await import("./repositories/mapObjects");
+        const result = await getMapObjects(mapId);
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.post("/internal/map-objects", requireAuth, async (request, response) => {
+    try {
+        const { mapId, x, y, objIndex, amount, createdBy, state } = request.body;
+        const { placeObject } = await import("./repositories/mapObjects");
+        const result = await placeObject(mapId, x, y, objIndex, amount, createdBy, state);
+        response.status(201).json(result);
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.put("/internal/map-objects/:id/move", requireAuth, async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const { newX, newY } = request.body;
+        const { moveObject } = await import("./repositories/mapObjects");
+        const result = await moveObject(id, newX, newY);
+        if (!result) {
+            return response.status(404).json({ error: "Objeto no encontrado" });
+        }
+        response.json(result);
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.delete("/internal/map-objects/:id", requireAuth, async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const { removeObject } = await import("./repositories/mapObjects");
+        const ok = await removeObject(id);
+        if (!ok) {
+            return response.status(404).json({ error: "Objeto no encontrado" });
+        }
+        response.json({ success: true });
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.put("/internal/map-objects/:id/state", requireAuth, async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const { state } = request.body;
+        const { setObjectState } = await import("./repositories/mapObjects");
+        const result = await setObjectState(id, state);
+        if (!result) {
+            return response.status(404).json({ error: "Objeto no encontrado" });
+        }
+        response.json(result);
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.post("/internal/map-objects/structure", requireAuth, async (request, response) => {
+    try {
+        const { mapId, tiles, createdBy } = request.body;
+        const { placeStructure } = await import("./repositories/mapObjects");
+        const result = await placeStructure(mapId, tiles, createdBy);
+        response.status(201).json(result);
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
 void start();

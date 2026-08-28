@@ -652,3 +652,18 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS game_map_objects (
+    id SERIAL PRIMARY KEY,
+    map_id INTEGER NOT NULL CHECK (map_id > 0),
+    x INTEGER NOT NULL CHECK (x BETWEEN 1 AND 100),
+    y INTEGER NOT NULL CHECK (y BETWEEN 1 AND 100),
+    obj_index INTEGER NOT NULL CHECK (obj_index > 0),
+    amount INTEGER NOT NULL DEFAULT 1 CHECK (amount > 0),
+    state VARCHAR(50) NOT NULL DEFAULT 'default' CHECK (state IN ('default', 'door_open', 'door_closed', 'locked', 'destroyed')),
+    created_by UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_objects_map_coords
+    ON game_map_objects(map_id, x, y);
