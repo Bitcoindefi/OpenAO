@@ -4,7 +4,8 @@
     "private": true,
     "scripts": {
         "dev": "next dev --turbopack --hostname 0.0.0.0",
-        "build": "next build",
+        "check:maps": "node ./scripts/check-maps.mjs",
+        "build": "node ./scripts/check-maps.mjs && next build",
         "start": "next start",
         "lint": "eslint",
         "generate:headswithfile": "node ./scripts/generate-headswithfile.mjs"
