@@ -4,6 +4,7 @@
     "description": "",
     "main": "dist/server.js",
     "dependencies": {
+        "@openao/protocol": "file:../packages/protocol",
         "axios": "^1.16.1",
         "bytebuffer": "^5.0.1",
         "https": "^1.0.0",
