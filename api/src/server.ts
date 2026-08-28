@@ -3065,4 +3065,110 @@ app.get("/user-online-stats", async (request, response) => {
     }
 });
 
+app.post("/internal/user-maps", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            return response.status(401).json({ error: "No autorizado" });
+        }
+        const accountId = authorized.session.account._id;
+        const { name, terrain, zone } = request.body;
+        const { createUserMap } = await import("./repositories/userMaps");
+        const result = await createUserMap(accountId, name, terrain, zone);
+        response.status(201).json(result);
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/user-maps", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            return response.status(401).json({ error: "No autorizado" });
+        }
+        const accountId = authorized.session.account._id;
+        const { listUserMaps } = await import("./repositories/userMaps");
+        const result = await listUserMaps(accountId);
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/user-maps/quota", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            return response.status(401).json({ error: "No autorizado" });
+        }
+        const accountId = authorized.session.account._id;
+        const { getUserMapQuota } = await import("./repositories/userMaps");
+        const result = await getUserMapQuota(accountId);
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/user-maps/published", async (request, response) => {
+    try {
+        const page = Number(request.query.page || 1);
+        const limit = Number(request.query.limit || 20);
+        const { listPublishedUserMaps } = await import("./repositories/userMaps");
+        const result = await listPublishedUserMaps(page, limit);
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.get("/internal/user-maps/:id", async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const authorized = await getAuthorizedSession(request);
+        const callerAccountId = authorized?.session.account._id;
+        const { getUserMap } = await import("./repositories/userMaps");
+        const result = await getUserMap(id, callerAccountId);
+        if (!result) {
+            return response.status(404).json({ error: "Mapa no encontrado" });
+        }
+        response.json(result);
+    } catch (error) {
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.patch("/internal/user-maps/:id/status", async (request, response) => {
+    try {
+        const id = Number(request.params.id);
+        const { status } = request.body;
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            return response.status(401).json({ error: "No autorizado" });
+        }
+        const accountId = authorized.session.account._id;
+        const { updateUserMapStatus } = await import("./repositories/userMaps");
+        const result = await updateUserMapStatus(id, accountId, status);
+        if (!result) {
+            return response.status(404).json({ error: "Mapa no encontrado" });
+        }
+        response.json(result);
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
 void start();
