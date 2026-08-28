@@ -429,6 +429,8 @@ function trackClientActivity(ws: RuntimeClient, packageID: number) {
 
     ws.packetCount = Number(ws.packetCount ?? 0) + 1;
 
+    ws.lastActivityAt = now;
+
     if (isPingPacket) {
         // Keep transport liveness separate from real player activity so
         // keepalive traffic cannot contaminate AFK/gameplay metrics.
