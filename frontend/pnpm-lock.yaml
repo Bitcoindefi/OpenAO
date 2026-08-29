@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@openao/protocol':
+        specifier: link:../packages/protocol
+        version: link:../packages/protocol
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2

@@ -3,7 +3,8 @@ name: aoweb-frontend-blue
 services:
   frontend:
     build:
-      context: .
+      context: ../
+      dockerfile: frontend/Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://host.docker.internal/api}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:7666}
