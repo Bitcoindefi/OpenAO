@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { existsSync } from "fs";
 import fs from "fs/promises";
 import path from "path";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import pool from "../db";
 import { validatePngUpload } from "../lib/pngValidation";
@@ -229,6 +230,189 @@ export type MapTileEntity = TileEntityPlacement & {
     status: "draft" | "published";
 };
 
+export type MapRevisionOperation =
+    | "paint"
+    | "clear"
+    | "publish"
+    | "discard"
+    | "revert"
+    | "undo"
+    | "redo"
+    | "rollback";
+
+export type MapRevision = {
+    id: number;
+    mapNum: number;
+    operation: MapRevisionOperation;
+    authorAccountId: string | null;
+    before: MapTileOverride[];
+    after: MapTileOverride[];
+    metadata: Record<string, unknown>;
+    createdAt: string;
+};
+
+export type MapRevisionDiffEntry = {
+    x: number;
+    y: number;
+    layer: number;
+    before: Pick<MapTileOverride, "grhIndex" | "blocked" | "status"> | null;
+    after: Pick<MapTileOverride, "grhIndex" | "blocked" | "status"> | null;
+};
+
+function tileKey(tile: Pick<MapTileOverride, "x" | "y" | "layer">): string {
+    return `${tile.x}:${tile.y}:${tile.layer}`;
+}
+
+function normalizeSnapshot(tiles: MapTileOverride[]): MapTileOverride[] {
+    return [...tiles].sort(
+        (left, right) =>
+            left.y - right.y ||
+            left.x - right.x ||
+            left.layer - right.layer ||
+            left.status.localeCompare(right.status),
+    );
+}
+
+function snapshotsEqual(
+    left: MapTileOverride[],
+    right: MapTileOverride[],
+): boolean {
+    return JSON.stringify(normalizeSnapshot(left)) === JSON.stringify(normalizeSnapshot(right));
+}
+
+async function readMapState(
+    client: PoolClient,
+    mapNum: number,
+): Promise<MapTileOverride[]> {
+    const result = await client.query<{
+        x: number;
+        y: number;
+        layer: number;
+        grh_index: number | null;
+        blocked: boolean | null;
+        status: string;
+    }>(
+        `SELECT x, y, layer, grh_index, blocked, status
+         FROM game_map_tile_overrides
+         WHERE map_num = $1
+         ORDER BY y, x, layer, status`,
+        [mapNum],
+    );
+
+    return result.rows.map((row) => ({
+        x: row.x,
+        y: row.y,
+        layer: row.layer,
+        grhIndex: row.grh_index,
+        blocked: row.blocked,
+        status: row.status as "draft" | "published",
+    }));
+}
+
+async function replaceMapState(
+    client: PoolClient,
+    mapNum: number,
+    state: MapTileOverride[],
+): Promise<void> {
+    await client.query(
+        "DELETE FROM game_map_tile_overrides WHERE map_num = $1",
+        [mapNum],
+    );
+
+    for (const tile of state) {
+        await client.query(
+            `INSERT INTO game_map_tile_overrides
+                 (map_num, x, y, layer, grh_index, blocked, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+                mapNum,
+                tile.x,
+                tile.y,
+                tile.layer,
+                tile.grhIndex,
+                tile.blocked,
+                tile.status,
+            ],
+        );
+    }
+}
+
+async function appendMapRevision(
+    client: PoolClient,
+    mapNum: number,
+    operation: MapRevisionOperation,
+    authorAccountId: string | null,
+    before: MapTileOverride[],
+    after: MapTileOverride[],
+    metadata: Record<string, unknown> = {},
+): Promise<number> {
+    const result = await client.query<{ id: string }>(
+        `INSERT INTO game_map_revisions
+             (map_num, operation, author_account_id, before_state, after_state, metadata)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)
+         RETURNING id`,
+        [
+            mapNum,
+            operation,
+            authorAccountId,
+            JSON.stringify(normalizeSnapshot(before)),
+            JSON.stringify(normalizeSnapshot(after)),
+            JSON.stringify(metadata),
+        ],
+    );
+    const revisionId = Number(result.rows[0]?.id ?? 0);
+
+    await client.query(
+        `INSERT INTO game_map_revision_heads
+             (map_num, current_revision_id, redo_revision_id, updated_at)
+         VALUES ($1, $2, NULL, NOW())
+         ON CONFLICT (map_num) DO UPDATE
+         SET current_revision_id = EXCLUDED.current_revision_id,
+             redo_revision_id = NULL,
+             updated_at = NOW()`,
+        [mapNum, revisionId],
+    );
+
+    return revisionId;
+}
+
+function toMapRevision(row: {
+    id: string;
+    map_num: number;
+    operation: string;
+    author_account_id: string | null;
+    before_state: MapTileOverride[];
+    after_state: MapTileOverride[];
+    metadata: Record<string, unknown>;
+    created_at: Date;
+}): MapRevision {
+    return {
+        id: Number(row.id),
+        mapNum: row.map_num,
+        operation: row.operation as MapRevisionOperation,
+        authorAccountId: row.author_account_id,
+        before: row.before_state,
+        after: row.after_state,
+        metadata: row.metadata ?? {},
+        createdAt: row.created_at.toISOString(),
+    };
+}
+
+async function getRevisionForClient(
+    client: PoolClient,
+    mapNum: number,
+    revisionId: number,
+): Promise<MapRevision | null> {
+    const result = await client.query<Parameters<typeof toMapRevision>[0]>(
+        `SELECT id, map_num, operation, author_account_id,
+                before_state, after_state, metadata, created_at
+         FROM game_map_revisions
+         WHERE map_num = $1 AND id = $2
+         LIMIT 1`,
+        [mapNum, revisionId],
+    );
+    return result.rows[0] ? toMapRevision(result.rows[0]) : null;
+}
 /**
  * Pinta tiles como BORRADOR. No los ve ningun jugador hasta publicar.
  *
@@ -239,11 +423,12 @@ export async function paintTiles(
     mapNum: number,
     tiles: TilePaint[],
     accountId: string,
-): Promise<{ applied: number }> {
+): Promise<{ applied: number; revisionId: number | null }> {
     const client = await pool.connect();
 
     try {
         await client.query("BEGIN");
+        const before = await readMapState(client, mapNum);
 
         for (const tile of tiles) {
             // Un grafico referenciado tiene que existir: o es uno original del
@@ -285,9 +470,21 @@ export async function paintTiles(
             );
         }
 
+        const after = await readMapState(client, mapNum);
+        const revisionId = snapshotsEqual(before, after)
+            ? null
+            : await appendMapRevision(
+                  client,
+                  mapNum,
+                  "paint",
+                  accountId,
+                  before,
+                  after,
+              );
+
         await client.query("COMMIT");
 
-        return { applied: tiles.length };
+        return { applied: tiles.length, revisionId };
     } catch (error) {
         await client.query("ROLLBACK");
         throw error;
@@ -452,11 +649,16 @@ export async function listMapTileEntities(
 export async function publishMap(
     mapNum: number,
     accountId: string,
-): Promise<{ published: number; publishedEntities: number }> {
+): Promise<{
+    published: number;
+    publishedEntities: number;
+    revisionId: number | null;
+}> {
     const client = await pool.connect();
 
     try {
         await client.query("BEGIN");
+        const before = await readMapState(client, mapNum);
 
         const result = await client.query(
             `INSERT INTO game_map_tile_overrides
@@ -495,11 +697,25 @@ export async function publishMap(
             [mapNum],
         );
 
+        const after = await readMapState(client, mapNum);
+        const revisionId = result.rowCount === 0
+            ? null
+            : await appendMapRevision(
+                  client,
+                  mapNum,
+                  "publish",
+                  accountId,
+                  before,
+                  after,
+                  { published: true },
+              );
+
         await client.query("COMMIT");
 
         return {
             published: result.rowCount ?? 0,
             publishedEntities: entitiesResult.rowCount ?? 0,
+            revisionId,
         };
     } catch (error) {
         await client.query("ROLLBACK");
@@ -512,21 +728,48 @@ export async function publishMap(
 /** Descarta los borradores sin tocar lo que ya esta publicado. */
 export async function discardDrafts(
     mapNum: number,
-): Promise<{ discarded: number; discardedEntities: number }> {
-    const result = await pool.query(
-        `DELETE FROM game_map_tile_overrides WHERE map_num = $1 AND status = 'draft'`,
-        [mapNum],
-    );
+    accountId: string,
+): Promise<{
+    discarded: number;
+    discardedEntities: number;
+    revisionId: number | null;
+}> {
+    const client = await pool.connect();
 
-    const entitiesResult = await pool.query(
-        `DELETE FROM game_map_tile_entities WHERE map_num = $1 AND status = 'draft'`,
-        [mapNum],
-    );
-
-    return {
-        discarded: result.rowCount ?? 0,
-        discardedEntities: entitiesResult.rowCount ?? 0,
-    };
+    try {
+        await client.query("BEGIN");
+        const before = await readMapState(client, mapNum);
+        const result = await client.query(
+            `DELETE FROM game_map_tile_overrides WHERE map_num = $1 AND status = 'draft'`,
+            [mapNum],
+        );
+        const entitiesResult = await client.query(
+            `DELETE FROM game_map_tile_entities WHERE map_num = $1 AND status = 'draft'`,
+            [mapNum],
+        );
+        const after = await readMapState(client, mapNum);
+        const revisionId = result.rowCount === 0
+            ? null
+            : await appendMapRevision(
+                  client,
+                  mapNum,
+                  "discard",
+                  accountId,
+                  before,
+                  after,
+              );
+        await client.query("COMMIT");
+        return {
+            discarded: result.rowCount ?? 0,
+            discardedEntities: entitiesResult.rowCount ?? 0,
+            revisionId,
+        };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 /**
@@ -535,21 +778,48 @@ export async function discardDrafts(
  */
 export async function revertMap(
     mapNum: number,
-): Promise<{ reverted: number; revertedEntities: number }> {
-    const result = await pool.query(
-        `DELETE FROM game_map_tile_overrides WHERE map_num = $1`,
-        [mapNum],
-    );
+    accountId: string,
+): Promise<{
+    reverted: number;
+    revertedEntities: number;
+    revisionId: number | null;
+}> {
+    const client = await pool.connect();
 
-    const entitiesResult = await pool.query(
-        `DELETE FROM game_map_tile_entities WHERE map_num = $1`,
-        [mapNum],
-    );
-
-    return {
-        reverted: result.rowCount ?? 0,
-        revertedEntities: entitiesResult.rowCount ?? 0,
-    };
+    try {
+        await client.query("BEGIN");
+        const before = await readMapState(client, mapNum);
+        const result = await client.query(
+            `DELETE FROM game_map_tile_overrides WHERE map_num = $1`,
+            [mapNum],
+        );
+        const entitiesResult = await client.query(
+            `DELETE FROM game_map_tile_entities WHERE map_num = $1`,
+            [mapNum],
+        );
+        const after = await readMapState(client, mapNum);
+        const revisionId = result.rowCount === 0
+            ? null
+            : await appendMapRevision(
+                  client,
+                  mapNum,
+                  "revert",
+                  accountId,
+                  before,
+                  after,
+              );
+        await client.query("COMMIT");
+        return {
+            reverted: result.rowCount ?? 0,
+            revertedEntities: entitiesResult.rowCount ?? 0,
+            revisionId,
+        };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 /** Cuantos tiles y entidades tiene el mapa en cada estado, para mostrar en la UI. */
@@ -597,14 +867,299 @@ export async function clearTile(
     x: number,
     y: number,
     layer: number,
-): Promise<boolean> {
-    const result = await pool.query(
-        `DELETE FROM game_map_tile_overrides
-         WHERE map_num = $1 AND x = $2 AND y = $3 AND layer = $4 AND status = 'draft'`,
-        [mapNum, x, y, layer],
+    accountId: string,
+): Promise<{ removed: boolean; revisionId: number | null }> {
+    const client = await pool.connect();
+
+    try {
+        await client.query("BEGIN");
+        const before = await readMapState(client, mapNum);
+        const result = await client.query(
+            `DELETE FROM game_map_tile_overrides
+             WHERE map_num = $1 AND x = $2 AND y = $3 AND layer = $4 AND status = 'draft'`,
+            [mapNum, x, y, layer],
+        );
+        const after = await readMapState(client, mapNum);
+        const revisionId = result.rowCount === 0
+            ? null
+            : await appendMapRevision(
+                  client,
+                  mapNum,
+                  "clear",
+                  accountId,
+                  before,
+                  after,
+              );
+        await client.query("COMMIT");
+        return { removed: (result.rowCount ?? 0) > 0, revisionId };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export async function listMapRevisions(
+    mapNum: number,
+    limit = 50,
+): Promise<Array<Omit<MapRevision, "before" | "after"> & { changeCount: number }>> {
+    const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
+    const result = await pool.query<{
+        id: string;
+        map_num: number;
+        operation: string;
+        author_account_id: string | null;
+        before_state: MapTileOverride[];
+        after_state: MapTileOverride[];
+        metadata: Record<string, unknown>;
+        created_at: Date;
+    }>(
+        `SELECT id, map_num, operation, author_account_id,
+                before_state, after_state, metadata, created_at
+         FROM game_map_revisions
+         WHERE map_num = $1
+         ORDER BY id DESC
+         LIMIT $2`,
+        [mapNum, safeLimit],
     );
 
-    return (result.rowCount ?? 0) > 0;
+    return result.rows.map((row) => {
+        const revision = toMapRevision(row);
+        return {
+            id: revision.id,
+            mapNum: revision.mapNum,
+            operation: revision.operation,
+            authorAccountId: revision.authorAccountId,
+            metadata: revision.metadata,
+            createdAt: revision.createdAt,
+            changeCount: diffMapStates(revision.before, revision.after).length,
+        };
+    });
+}
+
+export async function getMapRevision(
+    mapNum: number,
+    revisionId: number,
+): Promise<MapRevision | null> {
+    const result = await pool.query<Parameters<typeof toMapRevision>[0]>(
+        `SELECT id, map_num, operation, author_account_id,
+                before_state, after_state, metadata, created_at
+         FROM game_map_revisions
+         WHERE map_num = $1 AND id = $2
+         LIMIT 1`,
+        [mapNum, revisionId],
+    );
+    return result.rows[0] ? toMapRevision(result.rows[0]) : null;
+}
+
+function diffMapStates(
+    before: MapTileOverride[],
+    after: MapTileOverride[],
+): MapRevisionDiffEntry[] {
+    const beforeByKey = new Map(before.map((tile) => [tileKey(tile), tile]));
+    const afterByKey = new Map(after.map((tile) => [tileKey(tile), tile]));
+    const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
+
+    return [...keys]
+        .map((key) => {
+            const previous = beforeByKey.get(key);
+            const next = afterByKey.get(key);
+            const same = previous && next &&
+                previous.grhIndex === next.grhIndex &&
+                previous.blocked === next.blocked &&
+                previous.status === next.status;
+            if (same) return null;
+
+            const [x, y, layer] = key.split(":").map(Number);
+            return {
+                x,
+                y,
+                layer,
+                before: previous
+                    ? {
+                          grhIndex: previous.grhIndex,
+                          blocked: previous.blocked,
+                          status: previous.status,
+                      }
+                    : null,
+                after: next
+                    ? {
+                          grhIndex: next.grhIndex,
+                          blocked: next.blocked,
+                          status: next.status,
+                      }
+                    : null,
+            };
+        })
+        .filter((entry): entry is MapRevisionDiffEntry => entry !== null)
+        .sort((left, right) => left.y - right.y || left.x - right.x || left.layer - right.layer);
+}
+
+export async function diffMapRevisions(
+    mapNum: number,
+    fromRevisionId: number,
+    toRevisionId: number,
+): Promise<MapRevisionDiffEntry[]> {
+    const [from, to] = await Promise.all([
+        getMapRevision(mapNum, fromRevisionId),
+        getMapRevision(mapNum, toRevisionId),
+    ]);
+    if (!from || !to) {
+        throw new Error("Revision de mapa no encontrada.");
+    }
+    return diffMapStates(from.after, to.after);
+}
+
+export async function undoMap(
+    mapNum: number,
+    accountId: string,
+): Promise<{ changed: boolean; revisionId: number | null; requiresRepublish: boolean }> {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const headResult = await client.query<{ current_revision_id: string | null }>(
+            `SELECT current_revision_id
+             FROM game_map_revision_heads
+             WHERE map_num = $1
+             FOR UPDATE`,
+            [mapNum],
+        );
+        const currentId = Number(headResult.rows[0]?.current_revision_id ?? 0);
+        const current = currentId
+            ? await getRevisionForClient(client, mapNum, currentId)
+            : null;
+        if (!current || current.operation === "undo") {
+            await client.query("COMMIT");
+            return { changed: false, revisionId: null, requiresRepublish: false };
+        }
+
+        const before = current.after;
+        const after = current.before;
+        await replaceMapState(client, mapNum, after);
+        const revisionResult = await client.query<{ id: string }>(
+            `INSERT INTO game_map_revisions
+                 (map_num, operation, author_account_id, before_state, after_state, metadata)
+             VALUES ($1, 'undo', $2, $3::jsonb, $4::jsonb, $5::jsonb)
+             RETURNING id`,
+            [
+                mapNum,
+                accountId,
+                JSON.stringify(normalizeSnapshot(before)),
+                JSON.stringify(normalizeSnapshot(after)),
+                JSON.stringify({ undoneRevisionId: current.id }),
+            ],
+        );
+        const revisionId = Number(revisionResult.rows[0]?.id ?? 0);
+        await client.query(
+            `UPDATE game_map_revision_heads
+             SET current_revision_id = $2, redo_revision_id = $3, updated_at = NOW()
+             WHERE map_num = $1`,
+            [mapNum, revisionId, current.id],
+        );
+        await client.query("COMMIT");
+        return {
+            changed: true,
+            revisionId,
+            requiresRepublish: current.operation === "publish",
+        };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export async function redoMap(
+    mapNum: number,
+    accountId: string,
+): Promise<{ changed: boolean; revisionId: number | null }> {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const headResult = await client.query<{ current_revision_id: string | null; redo_revision_id: string | null }>(
+            `SELECT current_revision_id, redo_revision_id
+             FROM game_map_revision_heads
+             WHERE map_num = $1
+             FOR UPDATE`,
+            [mapNum],
+        );
+        const currentId = Number(headResult.rows[0]?.current_revision_id ?? 0);
+        const redoId = Number(headResult.rows[0]?.redo_revision_id ?? 0);
+        const current = currentId
+            ? await getRevisionForClient(client, mapNum, currentId)
+            : null;
+        const target = redoId
+            ? await getRevisionForClient(client, mapNum, redoId)
+            : null;
+        if (!current || !target) {
+            await client.query("COMMIT");
+            return { changed: false, revisionId: null };
+        }
+
+        const before = current.after;
+        const after = target.after;
+        await replaceMapState(client, mapNum, after);
+        const revisionResult = await client.query<{ id: string }>(
+            `INSERT INTO game_map_revisions
+                 (map_num, operation, author_account_id, before_state, after_state, metadata)
+             VALUES ($1, 'redo', $2, $3::jsonb, $4::jsonb, $5::jsonb)
+             RETURNING id`,
+            [
+                mapNum,
+                accountId,
+                JSON.stringify(normalizeSnapshot(before)),
+                JSON.stringify(normalizeSnapshot(after)),
+                JSON.stringify({ redoneRevisionId: target.id }),
+            ],
+        );
+        const revisionId = Number(revisionResult.rows[0]?.id ?? 0);
+        await client.query(
+            `UPDATE game_map_revision_heads
+             SET current_revision_id = $2, redo_revision_id = NULL, updated_at = NOW()
+             WHERE map_num = $1`,
+            [mapNum, revisionId],
+        );
+        await client.query("COMMIT");
+        return { changed: true, revisionId };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export async function rollbackMap(
+    mapNum: number,
+    revisionId: number,
+    accountId: string,
+): Promise<{ revisionId: number; targetRevisionId: number }> {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const target = await getRevisionForClient(client, mapNum, revisionId);
+        if (!target) throw new Error("Revision de mapa no encontrada.");
+        const before = await readMapState(client, mapNum);
+        await replaceMapState(client, mapNum, target.after);
+        const createdRevisionId = await appendMapRevision(
+            client,
+            mapNum,
+            "rollback",
+            accountId,
+            before,
+            target.after,
+            { targetRevisionId: revisionId },
+        );
+        await client.query("COMMIT");
+        return { revisionId: createdRevisionId, targetRevisionId: revisionId };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 /**

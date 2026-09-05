@@ -97,20 +97,26 @@ import {
 } from "./repositories/gameBalance";
 import {
     clearTile,
+    diffMapRevisions,
     discardDrafts,
     getGraphicContent,
+    getMapRevision,
     getMapStatus,
     getMapTerrainPalette,
     listGraphics,
+    listMapRevisions,
     listMapOverrides,
     listMapTileEntities,
     paintTiles,
     paintTilesSchema,
     placeTileEntity,
     publishMap,
+    redoMap,
     removeTileEntity,
     revertMap,
+    rollbackMap,
     tileEntitySchema,
+    undoMap,
     uploadGraphic,
 } from "./repositories/worldBuilder";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
@@ -906,7 +912,15 @@ app.delete(
                 return;
             }
 
-            response.json({ removed: await clearTile(mapNum, x, y, layer) });
+            response.json({
+                removed: await clearTile(
+                    mapNum,
+                    x,
+                    y,
+                    layer,
+                    authorized.session.account._id,
+                ),
+            });
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
@@ -1049,7 +1063,9 @@ app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
             return;
         }
 
-        response.json(await discardDrafts(mapNum));
+        response.json(
+            await discardDrafts(mapNum, authorized.session.account._id),
+        );
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1073,7 +1089,7 @@ app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
             return;
         }
 
-        response.json(await revertMap(mapNum));
+        response.json(await revertMap(mapNum, authorized.session.account._id));
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1101,6 +1117,159 @@ app.get("/admin/game-data/maps/:mapNum/status", async (request, response) => {
         response.status(400).json({ error: message });
     }
 });
+
+/** Historial auditable de un mapa, con autor, operación y cantidad de cambios. */
+app.get("/admin/game-data/maps/:mapNum/revisions", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const limit = Number.parseInt(String(request.query.limit ?? "50"), 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        response.json({ mapNum, revisions: await listMapRevisions(mapNum, limit) });
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+/** Diff legible entre dos revisiones del mismo mapa. */
+app.get(
+    "/admin/game-data/maps/:mapNum/revisions/diff",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const fromRevisionId = Number.parseInt(String(request.query.from ?? ""), 10);
+            const toRevisionId = Number.parseInt(String(request.query.to ?? ""), 10);
+            if (
+                ![mapNum, fromRevisionId, toRevisionId].every(Number.isInteger) ||
+                mapNum <= 0 ||
+                fromRevisionId <= 0 ||
+                toRevisionId <= 0
+            ) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+            response.json({
+                mapNum,
+                fromRevisionId,
+                toRevisionId,
+                changes: await diffMapRevisions(
+                    mapNum,
+                    fromRevisionId,
+                    toRevisionId,
+                ),
+            });
+        } catch (error) {
+            response.status(400).json({
+                error: error instanceof Error ? error.message : "Unexpected error",
+            });
+        }
+    },
+);
+
+/** Devuelve el snapshot completo de una revisión concreta. */
+app.get(
+    "/admin/game-data/maps/:mapNum/revisions/:revisionId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const revisionId = Number.parseInt(request.params.revisionId ?? "", 10);
+            if (
+                ![mapNum, revisionId].every(Number.isInteger) ||
+                mapNum <= 0 ||
+                revisionId <= 0
+            ) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+            const revision = await getMapRevision(mapNum, revisionId);
+            if (!revision) {
+                response.status(404).json({ error: "Revision de mapa no encontrada." });
+                return;
+            }
+            response.json(revision);
+        } catch (error) {
+            response.status(400).json({
+                error: error instanceof Error ? error.message : "Unexpected error",
+            });
+        }
+    },
+);
+
+app.post("/admin/game-data/maps/:mapNum/undo", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        response.json(await undoMap(mapNum, authorized.session.account._id));
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.post("/admin/game-data/maps/:mapNum/redo", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        response.json(await redoMap(mapNum, authorized.session.account._id));
+    } catch (error) {
+        response.status(400).json({
+            error: error instanceof Error ? error.message : "Unexpected error",
+        });
+    }
+});
+
+app.post(
+    "/admin/game-data/maps/:mapNum/rollback/:revisionId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const revisionId = Number.parseInt(request.params.revisionId ?? "", 10);
+            if (
+                ![mapNum, revisionId].every(Number.isInteger) ||
+                mapNum <= 0 ||
+                revisionId <= 0
+            ) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+            response.json(
+                await rollbackMap(
+                    mapNum,
+                    revisionId,
+                    authorized.session.account._id,
+                ),
+            );
+        } catch (error) {
+            response.status(400).json({
+                error: error instanceof Error ? error.message : "Unexpected error",
+            });
+        }
+    },
+);
 
 /**
  * Paleta de tiles disponibles para el mapa actual: las entradas de la paleta
