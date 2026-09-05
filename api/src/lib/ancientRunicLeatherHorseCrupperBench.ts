@@ -1,0 +1,261 @@
+﻿import crypto from "node:crypto";
+
+/**
+ * Ancient Runic Leather Horse Crupper Bench, Mithril Forked Boss & Celestial Valkyrie Tail-Dock Engine for OpenAO MMORPG.
+ * Simulates tail dock strap stitching benches and forked boss tension rigs (Elm Crupper Bench, Runic Yew Tail Rig, Celestial Void Valkyrie Dock Sanctum),
+ * raw tanned buffalo dock straps and tempered mithril forked boss sets (Tanned Buffalo Dock Strap, Tempered Mithril Forked Boss Set, Celestial Void Astral Crupper Pelt),
+ * novice hill dock cruppers and sovereign aerial crupper recipes (Novice Hill Dock Crupper, Warmaster Mithril Boss Crupper, Celestial Void Valkyrie Sovereign Crupper),
+ * independent steed forward-slip mitigation & dock retention ratings (scaled across catalog baselines ~16% to 100%), calibrated clamped forward slip mitigation bonus and tail dock comfort scaling,
+ * upfront leather material deduction on all craft attempts, consistent remainingProvidedLeathers return shapes across all paths, immutable bench cloning for safe rollbacks on both craft and maintain operations, cached static catalog maxima, crypto-secure default gameplay rolls strictly in [0, 1), authoritative catalog power ratio without dead instance fields, and horse crupper bench maintenance.
+ */
+
+export type CrupperBenchType = "ELM_CRUPPER_BENCH" | "RUNIC_YEW_TAIL_RIG" | "CELESTIAL_VOID_VALKYRIE_DOCK_SANCTUM";
+export type RawLeatherCrupperType = "TANNED_BUFFALO_DOCK_STRAP" | "TEMPERED_MITHRIL_FORKED_BOSS_SET" | "CELESTIAL_VOID_ASTRAL_CRUPPER_PELT";
+export type CrupperRecipeType = "NOVICE_HILL_DOCK_CRUPPER" | "WARMASTER_MITHRIL_BOSS_CRUPPER" | "CELESTIAL_VOID_VALKYRIE_SOVEREIGN_CRUPPER";
+
+export interface CrupperBenchData {
+    benchType: CrupperBenchType;
+    maxDurability: number;
+    leathercraftPower: number;
+    baseSuccessRatePercent: number; // 0 to 100
+    dockRetentionBonusPercent: number;
+}
+
+export interface CrupperRecipeData {
+    recipeType: CrupperRecipeType;
+    requiredLeatherType: RawLeatherCrupperType;
+    requiredLeatherCount: number;
+    baseForwardSlipMitigationPercent: number;
+    baseTailDockComfortBonusPercent: number;
+}
+
+export interface ActiveCrupperBench {
+    benchId: string;
+    leatherworkerPlayerId: string;
+    benchType: CrupperBenchType;
+    currentDurability: number;
+    maxDurability: number;
+    isFunctional: boolean;
+}
+
+export interface CraftedHorseCrupper {
+    crupperId: string;
+    recipeType: CrupperRecipeType;
+    finalForwardSlipMitigationPercent: number;
+    finalTailDockComfortBonusPercent: number;
+    dockRetentionPercent: number; // Scaled rating (clamped 0 to 100%, with catalog bench baselines ~16% to 100%)
+    consumedLeatherCount: number;
+    consumedLeatherType: RawLeatherCrupperType;
+    remainingProvidedLeathers: RawLeatherCrupperType[];
+    craftedEpochMs: number;
+}
+
+export const CRUPPER_BENCH_CATALOG: Record<CrupperBenchType, CrupperBenchData> = {
+    ELM_CRUPPER_BENCH: { benchType: "ELM_CRUPPER_BENCH", maxDurability: 95, leathercraftPower: 30, baseSuccessRatePercent: 87, dockRetentionBonusPercent: 14 },
+    RUNIC_YEW_TAIL_RIG: { benchType: "RUNIC_YEW_TAIL_RIG", maxDurability: 200, leathercraftPower: 72, baseSuccessRatePercent: 94, dockRetentionBonusPercent: 24 },
+    CELESTIAL_VOID_VALKYRIE_DOCK_SANCTUM: { benchType: "CELESTIAL_VOID_VALKYRIE_DOCK_SANCTUM", maxDurability: 350, leathercraftPower: 130, baseSuccessRatePercent: 99, dockRetentionBonusPercent: 40 },
+};
+
+export const CRUPPER_RECIPE_CATALOG: Record<CrupperRecipeType, CrupperRecipeData> = {
+    NOVICE_HILL_DOCK_CRUPPER: { recipeType: "NOVICE_HILL_DOCK_CRUPPER", requiredLeatherType: "TANNED_BUFFALO_DOCK_STRAP", requiredLeatherCount: 2, baseForwardSlipMitigationPercent: 24, baseTailDockComfortBonusPercent: 14 },
+    WARMASTER_MITHRIL_BOSS_CRUPPER: { recipeType: "WARMASTER_MITHRIL_BOSS_CRUPPER", requiredLeatherType: "TEMPERED_MITHRIL_FORKED_BOSS_SET", requiredLeatherCount: 2, baseForwardSlipMitigationPercent: 50, baseTailDockComfortBonusPercent: 30 },
+    CELESTIAL_VOID_VALKYRIE_SOVEREIGN_CRUPPER: { recipeType: "CELESTIAL_VOID_VALKYRIE_SOVEREIGN_CRUPPER", requiredLeatherType: "CELESTIAL_VOID_ASTRAL_CRUPPER_PELT", requiredLeatherCount: 2, baseForwardSlipMitigationPercent: 84, baseTailDockComfortBonusPercent: 64 },
+};
+
+export class AncientRunicLeatherHorseCrupperBenchEngine {
+    public static readonly DURABILITY_COST_PER_CRAFT = 10;
+
+    /**
+     * Cached static catalog maxima to prevent runtime array reallocation.
+     */
+    public static readonly CATALOG_MAXIMA = {
+        maxPower: Math.max(...Object.values(CRUPPER_BENCH_CATALOG).map(b => b.leathercraftPower), 1),
+        maxBonus: Math.max(...Object.values(CRUPPER_BENCH_CATALOG).map(b => b.dockRetentionBonusPercent), 1),
+    };
+
+    /**
+     * Generates a crypto-secure UUID or 128-bit hex string using node:crypto.
+     */
+    private static generateSecureId(): string {
+        if (typeof crypto.randomUUID === "function") {
+            return crypto.randomUUID();
+        }
+        return crypto.randomBytes(16).toString("hex");
+    }
+
+    /**
+     * Generates a cryptographically secure random float strictly in [0, 1).
+     */
+    public static generateSecureRoll(): number {
+        if (typeof crypto.randomInt === "function") {
+            return crypto.randomInt(0, 1000000) / 1000000;
+        }
+        return crypto.randomBytes(4).readUInt32LE(0) / 0x100000000;
+    }
+
+    /**
+     * Constructs and initializes a horse crupper stitching bench or tail rig.
+     */
+    public static constructBench(
+        leatherworkerPlayerId: string,
+        benchType: CrupperBenchType
+    ): ActiveCrupperBench {
+        const data = CRUPPER_BENCH_CATALOG[benchType];
+        if (!data) {
+            throw new Error(`Unsupported horse crupper bench type: ${String(benchType)}`);
+        }
+
+        const uuid = this.generateSecureId();
+
+        return {
+            benchId: `bench_${benchType.toLowerCase()}_${uuid}`,
+            leatherworkerPlayerId,
+            benchType,
+            currentDurability: data.maxDurability,
+            maxDurability: data.maxDurability,
+            isFunctional: true,
+        };
+    }
+
+    /**
+     * Stitches and tensions dock straps and tempered mithril forked bosses into horse cruppers.
+     * Returns an updated clone of `bench` leaving the input instance immutable.
+     */
+    public static craftCrupper(
+        bench: ActiveCrupperBench,
+        recipeType: CrupperRecipeType,
+        providedLeathers: RawLeatherCrupperType[],
+        craftRoll?: number,
+        retentionRoll?: number,
+        currentEpochMs = Date.now()
+    ): { success: boolean; crupper?: CraftedHorseCrupper; updatedBench?: ActiveCrupperBench; remainingDurability: number; remainingProvidedLeathers: RawLeatherCrupperType[]; reason?: string } {
+        const fallbackLeathers = Array.isArray(providedLeathers) ? [...providedLeathers] : [];
+
+        if (!bench || !bench.isFunctional || bench.currentDurability < this.DURABILITY_COST_PER_CRAFT) {
+            return {
+                success: false,
+                updatedBench: bench ? { ...bench } : undefined,
+                remainingDurability: bench?.currentDurability ?? 0,
+                remainingProvidedLeathers: fallbackLeathers,
+                reason: `Horse crupper bench is warped or lacks durability (requires ${this.DURABILITY_COST_PER_CRAFT}).`,
+            };
+        }
+
+        const benchData = CRUPPER_BENCH_CATALOG[bench.benchType];
+        if (!benchData) {
+            return { success: false, updatedBench: { ...bench }, remainingDurability: bench.currentDurability, remainingProvidedLeathers: fallbackLeathers, reason: `Unknown bench model: ${String(bench.benchType)}` };
+        }
+
+        const recipe = CRUPPER_RECIPE_CATALOG[recipeType];
+        if (!recipe) {
+            return { success: false, updatedBench: { ...bench }, remainingDurability: bench.currentDurability, remainingProvidedLeathers: fallbackLeathers, reason: `Unknown horse crupper recipe: ${String(recipeType)}` };
+        }
+
+        if (!Array.isArray(providedLeathers)) {
+            return { success: false, updatedBench: { ...bench }, remainingDurability: bench.currentDurability, remainingProvidedLeathers: [], reason: "Invalid leathers array." };
+        }
+
+        // Count matching leather materials
+        const matchingCount = providedLeathers.filter(l => l === recipe.requiredLeatherType).length;
+        if (matchingCount < recipe.requiredLeatherCount) {
+            return {
+                success: false,
+                updatedBench: { ...bench },
+                remainingDurability: bench.currentDurability,
+                remainingProvidedLeathers: fallbackLeathers,
+                reason: `Insufficient dock straps/forked bosses: requires ${recipe.requiredLeatherCount}x ${recipe.requiredLeatherType}, provided ${matchingCount}.`,
+            };
+        }
+
+        // Create updated bench clone
+        const updatedBench = { ...bench };
+
+        // Deduct durability on clone
+        updatedBench.currentDurability -= this.DURABILITY_COST_PER_CRAFT;
+        if (updatedBench.currentDurability < this.DURABILITY_COST_PER_CRAFT) {
+            updatedBench.currentDurability = Math.max(0, updatedBench.currentDurability);
+            updatedBench.isFunctional = false;
+        }
+
+        // Deduct materials upfront on all craft attempts
+        const remaining = [...providedLeathers];
+        let removed = 0;
+        for (let i = remaining.length - 1; i >= 0 && removed < recipe.requiredLeatherCount; i--) {
+            if (remaining[i] === recipe.requiredLeatherType) {
+                remaining.splice(i, 1);
+                removed++;
+            }
+        }
+
+        const safeRoll = typeof craftRoll === "number" && Number.isFinite(craftRoll) ? Math.max(0, Math.min(1, craftRoll)) : this.generateSecureRoll();
+        const rollPercent = safeRoll * 100;
+
+        if (rollPercent > benchData.baseSuccessRatePercent) {
+            return {
+                success: false,
+                updatedBench,
+                remainingDurability: updatedBench.currentDurability,
+                remainingProvidedLeathers: remaining,
+                reason: `Dock strap misaligned: mithril forked boss distorted during tension clamping, rolled ${rollPercent.toFixed(1)}, needed <= ${benchData.baseSuccessRatePercent}.`,
+            };
+        }
+
+        // Calculate independent dock retention score dynamically using cached catalog maxima & authoritative catalog values (clamped 0% to 100%)
+        const { maxPower, maxBonus } = this.CATALOG_MAXIMA;
+        const safeRetentionRoll = typeof retentionRoll === "number" && Number.isFinite(retentionRoll) ? Math.max(0, Math.min(1, retentionRoll)) : this.generateSecureRoll();
+        const powerRatio = Math.min(1.0, benchData.leathercraftPower / maxPower);
+        const bonusPoints = (benchData.dockRetentionBonusPercent / maxBonus) * 20;
+        const retentionScore = Math.max(0, Math.min(100, Math.round(
+            (safeRetentionRoll * 40) + (powerRatio * 40) + bonusPoints
+        )));
+        const qualityMultiplier = 0.8 + ((retentionScore / 100) * 0.4); // 0.8 to 1.2x
+
+        const finalForwardSlipMitigation = Math.max(0, Math.min(100, Math.round(recipe.baseForwardSlipMitigationPercent * qualityMultiplier)));
+        const finalDockComfortBonus = Math.max(0, Math.min(100, Math.round(recipe.baseTailDockComfortBonusPercent * qualityMultiplier)));
+
+        const uuid = this.generateSecureId();
+
+        const crupper: CraftedHorseCrupper = {
+            crupperId: `crupper_${recipeType.toLowerCase()}_${uuid}`,
+            recipeType,
+            finalForwardSlipMitigationPercent: finalForwardSlipMitigation,
+            finalTailDockComfortBonusPercent: finalDockComfortBonus,
+            dockRetentionPercent: retentionScore,
+            consumedLeatherCount: recipe.requiredLeatherCount,
+            consumedLeatherType: recipe.requiredLeatherType,
+            remainingProvidedLeathers: remaining,
+            craftedEpochMs: currentEpochMs,
+        };
+
+        return {
+            success: true,
+            crupper,
+            updatedBench,
+            remainingDurability: updatedBench.currentDurability,
+            remainingProvidedLeathers: remaining,
+        };
+    }
+
+    /**
+     * Cleans equestrian trail grime and maintains horse crupper bench.
+     * Returns an updated clone of `bench` leaving the input instance immutable.
+     */
+    public static maintainBench(
+        bench: ActiveCrupperBench,
+        repairAmount = 50
+    ): { success: boolean; updatedBench?: ActiveCrupperBench; newDurability: number; isFunctional: boolean } {
+        if (!bench) return { success: false, newDurability: 0, isFunctional: false };
+
+        const updatedBench = { ...bench };
+        const amt = Number.isFinite(repairAmount) ? Math.max(0, repairAmount) : 50;
+        updatedBench.currentDurability = Math.min(updatedBench.maxDurability, updatedBench.currentDurability + amt);
+        updatedBench.isFunctional = updatedBench.currentDurability >= this.DURABILITY_COST_PER_CRAFT;
+
+        return {
+            success: true,
+            updatedBench,
+            newDurability: updatedBench.currentDurability,
+            isFunctional: updatedBench.isFunctional,
+        };
+    }
+}
