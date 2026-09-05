@@ -10,17 +10,34 @@ import { setTextIfChanged } from "../rendering/textStyles";
 import { getSmoothedPingDisplay } from "../network/ping";
 import { parseQueuedSocketMessage } from "../network/packetQueue";
 
-type ManualConnectionConfig = {
+export type GameSessionCredentials = {
     wsUrl: string;
     ticket: string;
     typeGame?: number;
     idChar?: number;
+};
+
+type ManualConnectionConfig = GameSessionCredentials & {
     sessionKey: string;
+};
+
+export type ReconnectPhase =
+    | "idle"
+    | "scheduled"
+    | "connecting"
+    | "exhausted"
+    | "cancelled";
+
+export type ReconnectCommand = {
+    type: "cancel" | "retry";
+    nonce: number;
 };
 
 type UseGameSessionOptions = {
     connection?: ManualConnectionConfig | null;
     isClientReadyForConnection: boolean;
+    refreshConnectionCredentials?: () => Promise<GameSessionCredentials | null>;
+    reconnectCommand?: ReconnectCommand | null;
     activeSocketInstanceRef: RefObject<number>;
     websocketRef: RefObject<WebSocket | null>;
     activeSessionKeyRef: RefObject<string | null>;
@@ -77,6 +94,8 @@ type UseGameSessionOptions = {
 export function useGameSession({
     connection,
     isClientReadyForConnection,
+    refreshConnectionCredentials,
+    reconnectCommand,
     activeSocketInstanceRef,
     websocketRef,
     activeSessionKeyRef,
@@ -141,6 +160,16 @@ export function useGameSession({
     const clearAllCastBarsRef = useRef(clearAllCastBars);
     const onPacketRef = useRef(onPacket);
     const onPingSampleRef = useRef(onPingSample);
+    const refreshConnectionCredentialsRef = useRef(refreshConnectionCredentials);
+    const reconnectControllerRef = useRef<{
+        cancel: () => void;
+        retry: () => void;
+    } | null>(null);
+    const lastReconnectCommandNonceRef = useRef<number | null>(null);
+
+    useEffect(() => {
+        refreshConnectionCredentialsRef.current = refreshConnectionCredentials;
+    }, [refreshConnectionCredentials]);
 
     useEffect(() => {
         emitHudRef.current = emitHud;
@@ -218,6 +247,26 @@ export function useGameSession({
         onPingSampleRef.current = onPingSample;
     }, [onPingSample]);
 
+
+    useEffect(() => {
+        if (!reconnectCommand) {
+            return;
+        }
+        if (lastReconnectCommandNonceRef.current === reconnectCommand.nonce) {
+            return;
+        }
+        lastReconnectCommandNonceRef.current = reconnectCommand.nonce;
+        const controller = reconnectControllerRef.current;
+        if (!controller) {
+            return;
+        }
+        if (reconnectCommand.type === "cancel") {
+            controller.cancel();
+            return;
+        }
+        controller.retry();
+    }, [reconnectCommand]);
+
     useEffect(() => {
         const socketInstanceId = activeSocketInstanceRef.current + 1;
         activeSocketInstanceRef.current = socketInstanceId;
@@ -248,23 +297,6 @@ export function useGameSession({
             }
         };
 
-        const updatePingDisplay = (sampleMs: number) => {
-            const nextPing = getSmoothedPingDisplay(
-                recentPingSamplesRef.current,
-                sampleMs,
-            );
-            recentPingSamplesRef.current = nextPing.samples;
-            pingDisplayTextRef.current = nextPing.text;
-            onPingSampleRef.current?.(sampleMs);
-
-            if (pingTextRef.current) {
-                setTextIfChanged(
-                    pingTextRef.current,
-                    pingDisplayTextRef.current,
-                );
-            }
-        };
-
         const disconnectSocket = () => {
             clearPing();
             fpsDisplayTextRef.current = "FPS: 0";
@@ -285,6 +317,7 @@ export function useGameSession({
         };
 
         if (!connection) {
+            reconnectControllerRef.current = null;
             activeSessionKeyRef.current = null;
             disconnectSocket();
             pendingUserSnapshotRef.current = null;
@@ -292,7 +325,11 @@ export function useGameSession({
             setIsSceneReadyRef.current(false);
             setClientReadySessionKeyRef.current(null);
             emitHudRef.current(null);
-            emitStatusRef.current({ connected: false, connecting: false });
+            emitStatusRef.current({
+                connected: false,
+                connecting: false,
+                reconnectPhase: "idle",
+            });
             return;
         }
 
@@ -301,48 +338,65 @@ export function useGameSession({
             return;
         }
 
-        disconnectSocket();
-        activeSessionKeyRef.current = connection.sessionKey;
+        const MAX_RECONNECT_ATTEMPTS = 6;
+        const RECONNECT_BASE_DELAY_MS = 1000;
+        const RECONNECT_MAX_DELAY_MS = 30000;
 
-        const socket = new WebSocket(connection.wsUrl);
-        socket.binaryType = "arraybuffer";
-        websocketRef.current = socket;
+        let disposed = false;
+        let allowReconnect = true;
+        let reconnectAttempt = 0;
+        let reconnectTimer: number | null = null;
+        let reconnectCountdownTimer: number | null = null;
+        let openingSocket = false;
+        let activeCredentials: ManualConnectionConfig = { ...connection };
 
-        emitStatusRef.current({ connected: false, connecting: true });
-
-        socket.onopen = () => {
-            if (
-                activeSessionKeyRef.current !== connection.sessionKey ||
-                !isCurrentSocketInstance(socket)
-            ) {
-                socket.close();
-                return;
+        const clearReconnectTimers = () => {
+            if (reconnectTimer !== null) {
+                window.clearTimeout(reconnectTimer);
+                reconnectTimer = null;
             }
+            if (reconnectCountdownTimer !== null) {
+                window.clearInterval(reconnectCountdownTimer);
+                reconnectCountdownTimer = null;
+            }
+        };
 
-            const sendPing = () => {
-                if (socket.readyState !== WebSocket.OPEN) {
-                    return;
-                }
-
-                const token = nextPingTokenRef.current++;
-                pendingPingRef.current = {
-                    token,
-                    sentAt: performance.now(),
-                };
-                socket.send(createPingPacket(token));
-            };
-
-            socket.send(
-                createConnectCharacterPacket({
-                    ticket: connection.ticket,
-                    typeGame: connection.typeGame,
-                    idChar: connection.idChar,
-                }),
+        const getReconnectDelayMs = (attempt: number) =>
+            Math.min(
+                RECONNECT_MAX_DELAY_MS,
+                RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1),
             );
 
-            flushPendingChatRequestRef.current();
-            sendPing();
-            pingIntervalRef.current = window.setInterval(sendPing, 10000);
+        const intentionalDisconnectSocket = () => {
+            allowReconnect = false;
+            clearReconnectTimers();
+            disconnectSocket();
+        };
+
+        const emitDisconnectedStatus = ({
+            error,
+            connecting = false,
+            reconnectPhase = "idle",
+            attempt = reconnectAttempt,
+        }: {
+            error?: string;
+            connecting?: boolean;
+            reconnectPhase?:
+                | "idle"
+                | "scheduled"
+                | "connecting"
+                | "exhausted"
+                | "cancelled";
+            attempt?: number;
+        }) => {
+            emitStatusRef.current({
+                connected: false,
+                connecting,
+                error,
+                reconnectPhase,
+                reconnectAttempt: attempt,
+                reconnectMaxAttempts: MAX_RECONNECT_ATTEMPTS,
+            });
         };
 
         const processIncomingPacketQueue = async () => {
@@ -386,7 +440,7 @@ export function useGameSession({
                                 packet,
                                 engine,
                                 renderedMapNumber,
-                                disconnectSocket,
+                                disconnectSocket: intentionalDisconnectSocket,
                             });
                         }
                     } catch (packetError) {
@@ -449,65 +503,393 @@ export function useGameSession({
             return true;
         };
 
-        socket.onmessage = (event) => {
-            if (!isCurrentSocketInstance(socket)) {
+        const updatePingDisplay = (sampleMs: number) => {
+            const nextPing = getSmoothedPingDisplay(
+                recentPingSamplesRef.current,
+                sampleMs,
+            );
+            recentPingSamplesRef.current = nextPing.samples;
+            pingDisplayTextRef.current = nextPing.text;
+            onPingSampleRef.current?.(sampleMs);
+
+            if (pingTextRef.current) {
+                setTextIfChanged(
+                    pingTextRef.current,
+                    pingDisplayTextRef.current,
+                );
+            }
+        };
+
+        const refreshCredentialsIfNeeded = async (): Promise<boolean> => {
+            const refresh = refreshConnectionCredentialsRef.current;
+            if (!refresh) {
+                return true;
+            }
+
+            emitDisconnectedStatus({
+                connecting: true,
+                reconnectPhase: "connecting",
+                error: `Renovando ticket… (${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})`,
+                attempt: reconnectAttempt,
+            });
+
+            try {
+                const fresh = await refresh();
+                if (disposed || !allowReconnect) {
+                    return false;
+                }
+                if (!fresh?.ticket) {
+                    return false;
+                }
+                activeCredentials = {
+                    ...activeCredentials,
+                    ...fresh,
+                    sessionKey: connection.sessionKey,
+                };
+                return true;
+            } catch (error) {
+                console.error("Failed to refresh game ticket for reconnect", error);
+                return false;
+            }
+        };
+
+        const connectSocket = () => {
+            if (disposed || openingSocket) {
                 return;
             }
 
-            const rawMessage = event.data as
-                | Blob
-                | ArrayBuffer
-                | ArrayBufferView;
+            openingSocket = true;
+            clearReconnectTimers();
+            disconnectSocket();
+            activeSessionKeyRef.current = connection.sessionKey;
 
-            void tryHandlePongMessage(rawMessage)
-                .then((wasPong) => {
-                    if (wasPong) {
+            const socket = new WebSocket(activeCredentials.wsUrl);
+            socket.binaryType = "arraybuffer";
+            websocketRef.current = socket;
+
+            emitDisconnectedStatus({
+                connecting: true,
+                reconnectPhase: reconnectAttempt > 0 ? "connecting" : "idle",
+                error:
+                    reconnectAttempt > 0
+                        ? `Reconectando… (${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})`
+                        : undefined,
+                attempt: reconnectAttempt,
+            });
+
+            socket.onopen = () => {
+                openingSocket = false;
+                if (
+                    activeSessionKeyRef.current !== connection.sessionKey ||
+                    !isCurrentSocketInstance(socket)
+                ) {
+                    socket.close();
+                    return;
+                }
+
+                reconnectAttempt = 0;
+                allowReconnect = true;
+
+                const sendPing = () => {
+                    if (socket.readyState !== WebSocket.OPEN) {
                         return;
                     }
 
-                    incomingPacketQueueRef.current.push(rawMessage);
-                    void processIncomingPacketQueue();
-                })
-                .catch(() => {
-                    incomingPacketQueueRef.current.push(rawMessage);
-                    void processIncomingPacketQueue();
-                });
-        };
+                    const token = nextPingTokenRef.current++;
+                    pendingPingRef.current = {
+                        token,
+                        sentAt: performance.now(),
+                    };
+                    socket.send(createPingPacket(token));
+                };
 
-        socket.onerror = () => {
-            if (!isCurrentSocketInstance(socket)) {
-                return;
-            }
+                socket.send(
+                    createConnectCharacterPacket({
+                        ticket: activeCredentials.ticket,
+                        typeGame: activeCredentials.typeGame,
+                        idChar: activeCredentials.idChar,
+                    }),
+                );
 
-            setIsSceneReadyRef.current(false);
-            emitStatusRef.current({
-                connected: false,
-                connecting: false,
-                error: "No se pudo establecer la conexion websocket.",
-            });
-        };
+                flushPendingChatRequestRef.current();
+                sendPing();
+                pingIntervalRef.current = window.setInterval(sendPing, 10000);
+            };
 
-        socket.onclose = (event) => {
-            clearPing();
-            if (
-                activeSessionKeyRef.current === connection.sessionKey &&
-                isCurrentSocketInstance(socket)
-            ) {
+            socket.onmessage = (event) => {
+                if (!isCurrentSocketInstance(socket)) {
+                    return;
+                }
+
+                const rawMessage = event.data as
+                    | Blob
+                    | ArrayBuffer
+                    | ArrayBufferView;
+
+                void tryHandlePongMessage(rawMessage)
+                    .then((wasPong) => {
+                        if (wasPong) {
+                            return;
+                        }
+
+                        incomingPacketQueueRef.current.push(rawMessage);
+                        void processIncomingPacketQueue();
+                    })
+                    .catch(() => {
+                        incomingPacketQueueRef.current.push(rawMessage);
+                        void processIncomingPacketQueue();
+                    });
+            };
+
+            socket.onerror = () => {
+                if (!isCurrentSocketInstance(socket)) {
+                    return;
+                }
+
+                setIsSceneReadyRef.current(false);
+                // onclose handles reconnect scheduling; keep a visible interim error.
+                if (!allowReconnect) {
+                    emitDisconnectedStatus({
+                        error: "No se pudo establecer la conexion websocket.",
+                        reconnectPhase: "cancelled",
+                    });
+                }
+            };
+
+            socket.onclose = (event) => {
+                openingSocket = false;
+                clearPing();
+                if (
+                    activeSessionKeyRef.current !== connection.sessionKey ||
+                    !isCurrentSocketInstance(socket)
+                ) {
+                    return;
+                }
+
                 setIsSceneReadyRef.current(false);
                 const previousError = latestStatusRef.current.error;
                 const closeReason = event.reason.trim();
-                emitStatusRef.current({
-                    connected: false,
-                    connecting: false,
-                    error: closeReason || previousError || "Conexion cerrada.",
+                const fallbackError =
+                    closeReason || previousError || "Conexion cerrada.";
+
+                if (disposed || !allowReconnect) {
+                    emitDisconnectedStatus({
+                        error: fallbackError,
+                        reconnectPhase: allowReconnect ? "idle" : "cancelled",
+                    });
+                    return;
+                }
+
+                void scheduleReconnect(fallbackError);
+            };
+        };
+
+        const runReconnectAttempt = async () => {
+            if (disposed || !allowReconnect) {
+                return;
+            }
+
+            const refreshed = await refreshCredentialsIfNeeded();
+            if (disposed || !allowReconnect) {
+                return;
+            }
+
+            if (!refreshed) {
+                emitDisconnectedStatus({
+                    error: `No se pudo renovar el ticket. Reintentando… (${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})`,
+                    reconnectPhase: "scheduled",
+                    attempt: reconnectAttempt,
                 });
+                // Retry later with backoff without consuming an extra attempt label jump.
+                const delayMs = getReconnectDelayMs(reconnectAttempt);
+                reconnectTimer = window.setTimeout(() => {
+                    reconnectTimer = null;
+                    void runReconnectAttempt();
+                }, delayMs);
+                return;
+            }
+
+            connectSocket();
+        };
+
+        const scheduleReconnect = (reason?: string) => {
+            if (disposed || !allowReconnect) {
+                return;
+            }
+
+            clearReconnectTimers();
+
+            if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+                emitDisconnectedStatus({
+                    error:
+                        reason ||
+                        `No se pudo reconectar tras ${MAX_RECONNECT_ATTEMPTS} intentos.`,
+                    reconnectPhase: "exhausted",
+                    attempt: reconnectAttempt,
+                });
+                return;
+            }
+
+            reconnectAttempt += 1;
+            const delayMs = getReconnectDelayMs(reconnectAttempt);
+            const dueAt = Date.now() + delayMs;
+
+            const publishCountdown = () => {
+                const remainingSec = Math.max(
+                    1,
+                    Math.ceil((dueAt - Date.now()) / 1000),
+                );
+                emitDisconnectedStatus({
+                    connecting: false,
+                    reconnectPhase: "scheduled",
+                    attempt: reconnectAttempt,
+                    error: `Conexion perdida. Reconectando en ${remainingSec}s (${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})…`,
+                });
+            };
+
+            publishCountdown();
+            reconnectCountdownTimer = window.setInterval(publishCountdown, 500);
+            reconnectTimer = window.setTimeout(() => {
+                reconnectTimer = null;
+                if (reconnectCountdownTimer !== null) {
+                    window.clearInterval(reconnectCountdownTimer);
+                    reconnectCountdownTimer = null;
+                }
+                void runReconnectAttempt();
+            }, delayMs);
+        };
+
+        const cancelReconnect = () => {
+            allowReconnect = false;
+            clearReconnectTimers();
+            openingSocket = false;
+            const socket = websocketRef.current;
+            if (
+                socket &&
+                (socket.readyState === WebSocket.CONNECTING ||
+                    socket.readyState === WebSocket.OPEN)
+            ) {
+                // Keep an intentional close from scheduling again.
+                disconnectSocket();
+            }
+            emitDisconnectedStatus({
+                error: "Reconexion cancelada.",
+                reconnectPhase: "cancelled",
+                attempt: reconnectAttempt,
+            });
+        };
+
+        const retryReconnect = () => {
+            if (disposed) {
+                return;
+            }
+            allowReconnect = true;
+            clearReconnectTimers();
+            reconnectAttempt = 0;
+            void (async () => {
+                reconnectAttempt = 1;
+                emitDisconnectedStatus({
+                    connecting: true,
+                    reconnectPhase: "connecting",
+                    attempt: reconnectAttempt,
+                    error: `Reconectando… (${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})`,
+                });
+                const refreshed = await refreshCredentialsIfNeeded();
+                if (disposed || !allowReconnect) {
+                    return;
+                }
+                if (!refreshed) {
+                    scheduleReconnect("No se pudo renovar el ticket.");
+                    return;
+                }
+                connectSocket();
+            })();
+        };
+
+        reconnectControllerRef.current = {
+            cancel: cancelReconnect,
+            retry: retryReconnect,
+        };
+
+        let needsWakeReconnect = false;
+
+        const maybeWakeReconnect = () => {
+            if (disposed || !allowReconnect) {
+                return;
+            }
+            if (
+                typeof document !== "undefined" &&
+                document.visibilityState &&
+                document.visibilityState !== "visible"
+            ) {
+                return;
+            }
+
+            const socket = websocketRef.current;
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                needsWakeReconnect = false;
+                return;
+            }
+
+            if (
+                !needsWakeReconnect &&
+                socket &&
+                socket.readyState === WebSocket.CONNECTING
+            ) {
+                return;
+            }
+
+            // Resume from background / network restore: restart attempts instead of staying exhausted.
+            needsWakeReconnect = false;
+            clearReconnectTimers();
+            if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS || reconnectAttempt === 0) {
+                reconnectAttempt = 1;
+            }
+
+            if (socket && socket.readyState === WebSocket.CLOSING) {
+                needsWakeReconnect = true;
+                return;
+            }
+
+            void runReconnectAttempt();
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                maybeWakeReconnect();
             }
         };
 
+        const handlePageShow = () => {
+            maybeWakeReconnect();
+        };
+
+        const handlePageHide = () => {
+            needsWakeReconnect = true;
+        };
+
+        window.addEventListener("online", maybeWakeReconnect);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        window.addEventListener("pageshow", handlePageShow);
+        window.addEventListener("pagehide", handlePageHide);
+
+        connectSocket();
+
         return () => {
+            disposed = true;
+            allowReconnect = false;
+            reconnectControllerRef.current = null;
+            clearReconnectTimers();
+            window.removeEventListener("online", maybeWakeReconnect);
+            document.removeEventListener(
+                "visibilitychange",
+                handleVisibilityChange,
+            );
+            window.removeEventListener("pageshow", handlePageShow);
+            window.removeEventListener("pagehide", handlePageHide);
             if (
                 activeSessionKeyRef.current === connection.sessionKey &&
-                isCurrentSocketInstance(socket)
+                activeSocketInstanceRef.current === socketInstanceId
             ) {
                 activeSessionKeyRef.current = null;
             }

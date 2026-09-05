@@ -139,6 +139,13 @@ interface MapRendererProps {
     height?: number;
     embedded?: boolean;
     connection?: ManualConnectionConfig | null;
+    refreshConnectionCredentials?: () => Promise<{
+        wsUrl: string;
+        ticket: string;
+        typeGame?: number;
+        idChar?: number;
+    } | null>;
+    reconnectCommand?: { type: "cancel" | "retry"; nonce: number } | null;
     equipRequest?: { slot: number; token: number } | null;
     useItemClickRequest?: { slot: number; token: number } | null;
     useItemURequest?: { slot: number; token: number } | null;
@@ -225,6 +232,14 @@ interface RendererStatus {
     worldName?: string;
     error?: string;
     consoleLine?: string;
+    reconnectPhase?:
+        | "idle"
+        | "scheduled"
+        | "connecting"
+        | "exhausted"
+        | "cancelled";
+    reconnectAttempt?: number;
+    reconnectMaxAttempts?: number;
 }
 
 type LoadingStage =
@@ -667,6 +682,8 @@ export default function MapRenderer({
     height,
     embedded = false,
     connection,
+    refreshConnectionCredentials,
+    reconnectCommand,
     equipRequest,
     useItemClickRequest,
     useItemURequest,
@@ -1915,6 +1932,8 @@ export default function MapRenderer({
     useGameSession({
         connection,
         isClientReadyForConnection,
+        refreshConnectionCredentials,
+        reconnectCommand,
         activeSocketInstanceRef,
         websocketRef,
         activeSessionKeyRef,
