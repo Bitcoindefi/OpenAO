@@ -165,6 +165,14 @@ pnpm dev
 
 Abrir `http://localhost:3000`.
 
+Los mapas optimizados (`frontend/public/maps_optimized`) no están en git. Docker los genera al construir la imagen. Para un build de producción en local:
+
+```bash
+cd server
+pnpm install
+pnpm export-frontend-maps
+```
+
 ## Arquitectura
 
 | Componente | Carpeta | Puerto |

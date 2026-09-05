@@ -5,3 +5,7 @@
 **/coverage
 **/.env*
 screenshots
+frontend/public/maps_optimized
+api
+database
+docs

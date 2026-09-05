@@ -202,6 +202,12 @@ jobs:
         working-directory: frontend
         run: pnpm exec tsc --noEmit
 
+      - name: Export optimized maps
+        working-directory: server
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm export-frontend-maps
+
       - name: Build
         working-directory: frontend
         env:
