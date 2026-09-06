@@ -21,7 +21,11 @@ import {
     resolveGraphicFrame,
 } from "../../lib/graphicTextures";
 import { getBottomAnchoredGraphicPosition } from "../game/rendering/characterLayout";
-import type { MapTileEntity, TilePaint } from "../../lib/editor/editorApi";
+import type {
+    MapTileEntity,
+    MapTileOverride,
+    TilePaint,
+} from "../../lib/editor/editorApi";
 import {
     clearTileOverride,
     paintTiles,
@@ -29,6 +33,11 @@ import {
     removeTileEntity,
 } from "../../lib/editor/editorApi";
 import { useEditorStore } from "../../lib/editor/editorStore";
+import {
+    PaintHistory,
+    buildInverseTiles,
+    tilesInRect,
+} from "../../lib/editor/paintHistory";
 
 const TILE_SIZE = 32;
 const MIN_ZOOM = 0.25;
@@ -67,6 +76,55 @@ const texturePromiseCache = new Map<number, Promise<void>>();
 
 function tileKey(x: number, y: number): string {
     return `${x},${y}`;
+}
+
+function paintKey(x: number, y: number, layer: number): string {
+    return `${x},${y},${layer}`;
+}
+
+function previousPaintForTile(
+    tile: TilePaint,
+    overrides: MapTileOverride[],
+    mapData: MapData | null,
+    mapNum: number,
+): TilePaint {
+    const override = overrides.find(
+        (entry) =>
+            entry.x === tile.x &&
+            entry.y === tile.y &&
+            entry.layer === tile.layer,
+    );
+
+    if (override) {
+        return {
+            x: tile.x,
+            y: tile.y,
+            layer: tile.layer,
+            grhIndex: override.grhIndex,
+            blocked: override.blocked,
+        };
+    }
+
+    if (!hasMapTiles(mapData, mapNum)) {
+        return {
+            x: tile.x,
+            y: tile.y,
+            layer: tile.layer,
+            grhIndex: null,
+            blocked: null,
+        };
+    }
+
+    const baseTile = getTileAt(mapData, mapNum, tile.x, tile.y);
+    const grh = Number(baseTile?.graphics?.[String(tile.layer)] ?? 0);
+
+    return {
+        x: tile.x,
+        y: tile.y,
+        layer: tile.layer,
+        grhIndex: grh > 0 ? grh : null,
+        blocked: tile.layer === 1 ? Boolean(baseTile?.blocked) : null,
+    };
 }
 
 /**
@@ -187,6 +245,9 @@ export default function EditorCanvas({
     const [isPanning, setIsPanning] = useState(false);
     const [isApplying, setIsApplying] = useState(false);
     const [applyError, setApplyError] = useState<string | null>(null);
+    const [historySnapshot, setHistorySnapshot] = useState(() =>
+        new PaintHistory().snapshot(),
+    );
     const hoverHighlightRef = useRef<Graphics | null>(null);
     const gridLayerRef = useRef<Graphics | null>(null);
     const blockedLayerRef = useRef<Graphics | null>(null);
@@ -204,6 +265,9 @@ export default function EditorCanvas({
     }>({ timer: null, tiles: new Map(), needsRefresh: false, inFlight: [] });
     const applyingRef = useRef(false);
     const flushRef = useRef<(() => Promise<void>) | null>(null);
+    const paintHistoryRef = useRef(new PaintHistory());
+    const skipHistoryRef = useRef(false);
+    const rectStartRef = useRef<{ x: number; y: number } | null>(null);
 
     // Que borradores tiene cada tile, para que el borrador pida solo los
     // borrados que existen en vez de seis peticiones por tile.
@@ -758,6 +822,24 @@ export default function EditorCanvas({
         applyingRef.current = true;
         setIsApplying(true);
 
+        const inverse =
+            tiles.length > 0 && !skipHistoryRef.current
+                ? buildInverseTiles(
+                      tiles,
+                      new Map(
+                          tiles.map((tile) => [
+                              paintKey(tile.x, tile.y, tile.layer),
+                              previousPaintForTile(
+                                  tile,
+                                  overrides,
+                                  mapData,
+                                  mapNum,
+                              ),
+                          ]),
+                      ),
+                  )
+                : null;
+
         try {
             // Los errores de cada pedido ya se reportan donde se lanzo: aca solo
             // interesa no refrescar antes de que terminen, porque el mapa
@@ -768,6 +850,11 @@ export default function EditorCanvas({
 
             for (let i = 0; i < tiles.length; i += PAINT_BATCH_SIZE) {
                 await paintTiles(mapNum, tiles.slice(i, i + PAINT_BATCH_SIZE));
+            }
+
+            if (inverse) {
+                paintHistoryRef.current.push(tiles, inverse);
+                setHistorySnapshot(paintHistoryRef.current.snapshot());
             }
 
             await refreshMapData();
@@ -783,7 +870,7 @@ export default function EditorCanvas({
             applyingRef.current = false;
             setIsApplying(false);
         }
-    }, [mapNum, refreshMapData, refreshStatus]);
+    }, [mapData, mapNum, overrides, refreshMapData, refreshStatus]);
 
     useEffect(() => {
         flushRef.current = flushPending;
@@ -801,6 +888,93 @@ export default function EditorCanvas({
             void flushRef.current?.();
         }, PAINT_DEBOUNCE_MS);
     }, []);
+
+    const applyHistoryTiles = useCallback(
+        async (tiles: TilePaint[] | null) => {
+            if (!tiles || tiles.length === 0) {
+                return;
+            }
+
+            skipHistoryRef.current = true;
+            applyingRef.current = true;
+            setIsApplying(true);
+
+            try {
+                for (let i = 0; i < tiles.length; i += PAINT_BATCH_SIZE) {
+                    await paintTiles(
+                        mapNum,
+                        tiles.slice(i, i + PAINT_BATCH_SIZE),
+                    );
+                }
+
+                await refreshMapData();
+                await refreshStatus();
+                setApplyError(null);
+            } catch (error) {
+                setApplyError(
+                    error instanceof Error
+                        ? error.message
+                        : "No se pudieron guardar los cambios.",
+                );
+            } finally {
+                skipHistoryRef.current = false;
+                applyingRef.current = false;
+                setIsApplying(false);
+                setHistorySnapshot(paintHistoryRef.current.snapshot());
+            }
+        },
+        [mapNum, refreshMapData, refreshStatus],
+    );
+
+    const undoPaint = useCallback(async () => {
+        await flushRef.current?.();
+        await applyHistoryTiles(paintHistoryRef.current.undo());
+    }, [applyHistoryTiles]);
+
+    const redoPaint = useCallback(async () => {
+        await flushRef.current?.();
+        await applyHistoryTiles(paintHistoryRef.current.redo());
+    }, [applyHistoryTiles]);
+
+    useEffect(() => {
+        paintHistoryRef.current.clear();
+        setHistorySnapshot(paintHistoryRef.current.snapshot());
+    }, [mapNum]);
+
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            const target = event.target;
+
+            if (
+                target instanceof HTMLInputElement ||
+                target instanceof HTMLTextAreaElement ||
+                (target instanceof HTMLElement && target.isContentEditable)
+            ) {
+                return;
+            }
+
+            const modifier = event.metaKey || event.ctrlKey;
+            const key = event.key.toLowerCase();
+
+            if (modifier && key === "z" && !event.shiftKey) {
+                event.preventDefault();
+                void undoPaint();
+                return;
+            }
+
+            if (
+                (modifier && key === "y") ||
+                (modifier && event.shiftKey && key === "z") ||
+                (!modifier && event.shiftKey && key === "z")
+            ) {
+                event.preventDefault();
+                void redoPaint();
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [redoPaint, undoPaint]);
 
     /**
      * Borra las ediciones sin publicar del tile.
@@ -927,6 +1101,38 @@ export default function EditorCanvas({
             panStartRef.current = null;
             setIsPanning(false);
 
+            const rectStart = rectStartRef.current;
+
+            if (rectStart && tool?.kind === "terrain") {
+                const end = pointerTileRef.current ?? rectStart;
+                rectStartRef.current = null;
+
+                for (const tile of tilesInRect(
+                    rectStart.x,
+                    rectStart.y,
+                    end.x,
+                    end.y,
+                )) {
+                    if (
+                        tile.x < 1 ||
+                        tile.y < 1 ||
+                        tile.x > dimensions.width ||
+                        tile.y > dimensions.height
+                    ) {
+                        continue;
+                    }
+
+                    lastAppliedTileRef.current = null;
+                    void applyToolToTile(tile.x, tile.y);
+                }
+
+                lastAppliedTileRef.current = null;
+                void flushRef.current?.();
+                return;
+            }
+
+            rectStartRef.current = null;
+
             if (isDrawingRef.current) {
                 isDrawingRef.current = false;
                 lastAppliedTileRef.current = null;
@@ -968,9 +1174,15 @@ export default function EditorCanvas({
             }
 
             if (event.button === 0 && pointerTileRef.current && tool) {
+                lastAppliedTileRef.current = null;
+
+                if (event.altKey && tool.kind === "terrain") {
+                    rectStartRef.current = pointerTileRef.current;
+                    return;
+                }
+
                 isDrawingRef.current = true;
                 // Un click nuevo sobre el mismo tile si tiene que aplicar.
-                lastAppliedTileRef.current = null;
                 void applyToolToTile(
                     pointerTileRef.current.x,
                     pointerTileRef.current.y,
@@ -1004,21 +1216,39 @@ export default function EditorCanvas({
             }
 
             const hover = hoverHighlightRef.current;
+            const rectStart = rectStartRef.current;
 
-            if (hover && hasChangedTile) {
+            if (hover && (hasChangedTile || rectStart)) {
                 if (pointerTileRef.current) {
                     hover.visible = true;
                     hover.clear();
-                    hover
-                        .rect(
-                            (tileX - 1) * TILE_SIZE,
-                            (tileY - 1) * TILE_SIZE,
-                            TILE_SIZE,
-                            TILE_SIZE,
-                        )
-                        .fill({ color: 0xfbbf24, alpha: 0.25 })
-                        .stroke({ color: 0xfbbf24, alpha: 0.8, width: 1 });
-                } else {
+
+                    if (rectStart) {
+                        const minX = Math.min(rectStart.x, tileX);
+                        const maxX = Math.max(rectStart.x, tileX);
+                        const minY = Math.min(rectStart.y, tileY);
+                        const maxY = Math.max(rectStart.y, tileY);
+                        hover
+                            .rect(
+                                (minX - 1) * TILE_SIZE,
+                                (minY - 1) * TILE_SIZE,
+                                (maxX - minX + 1) * TILE_SIZE,
+                                (maxY - minY + 1) * TILE_SIZE,
+                            )
+                            .fill({ color: 0xfbbf24, alpha: 0.18 })
+                            .stroke({ color: 0xfbbf24, alpha: 0.85, width: 1 });
+                    } else {
+                        hover
+                            .rect(
+                                (tileX - 1) * TILE_SIZE,
+                                (tileY - 1) * TILE_SIZE,
+                                TILE_SIZE,
+                                TILE_SIZE,
+                            )
+                            .fill({ color: 0xfbbf24, alpha: 0.25 })
+                            .stroke({ color: 0xfbbf24, alpha: 0.8, width: 1 });
+                    }
+                } else if (!rectStart) {
                     hover.visible = false;
                 }
             }
@@ -1107,6 +1337,22 @@ export default function EditorCanvas({
             </div>
 
             <div className="pointer-events-none absolute right-3 top-3 flex gap-2">
+                <button
+                    type="button"
+                    onClick={() => void undoPaint()}
+                    disabled={!historySnapshot.canUndo || isApplying}
+                    className="pointer-events-auto rounded-full border border-white/10 bg-stone-950/80 px-2.5 py-1 text-[10px] text-stone-300 backdrop-blur-md transition hover:border-white/25 hover:text-stone-100 disabled:opacity-40"
+                >
+                    Deshacer
+                </button>
+                <button
+                    type="button"
+                    onClick={() => void redoPaint()}
+                    disabled={!historySnapshot.canRedo || isApplying}
+                    className="pointer-events-auto rounded-full border border-white/10 bg-stone-950/80 px-2.5 py-1 text-[10px] text-stone-300 backdrop-blur-md transition hover:border-white/25 hover:text-stone-100 disabled:opacity-40"
+                >
+                    Rehacer
+                </button>
                 <label className="pointer-events-auto flex cursor-pointer items-center gap-1.5 rounded-full border border-white/10 bg-stone-950/80 px-2.5 py-1 text-[10px] text-stone-300 backdrop-blur-md">
                     <input
                         type="checkbox"
