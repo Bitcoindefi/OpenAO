@@ -30,3 +30,9 @@ Cualquier coincidencia en nombres de archivos o de componentes es generica
 
 No se agregaron dependencias nuevas; se usan las ya presentes
 (pixi.js, next, react) con sus licencias existentes.
+
+## Follow-up: favorites + catalog helpers
+
+The `★` favorites strip and `frontend/lib/editor/catalogFilter.ts` helpers added
+after Stage 4 (#29) are original OpenAO code. They do not reuse any source from
+AO-object-editor; only the product requirement ("favoritos o recientes") is shared.

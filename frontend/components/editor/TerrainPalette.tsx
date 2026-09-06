@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type MouseEvent } from "react";
 import {
     createTerrainBrush,
     createUploadedGraphicBrush,
@@ -27,8 +27,15 @@ type PaletteTab = "terrain" | "uploaded";
  * independientes, no una sola con dos encabezados pegajosos.
  */
 export default function TerrainPalette() {
-    const { terrain, tool, setTool, addRecent, refreshMapData } =
-        useEditorStore();
+    const {
+        terrain,
+        tool,
+        setTool,
+        addRecent,
+        refreshMapData,
+        toggleFavorite,
+        isFavorite,
+    } = useEditorStore();
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadError, setUploadError] = useState<string | null>(null);
@@ -52,6 +59,19 @@ export default function TerrainPalette() {
     const handleSelect = (brush: TerrainBrush) => {
         setTool({ kind: "terrain", ...brush });
         addRecent({
+            kind: "terrain",
+            id: brush.paletteId,
+            grhIndex: brush.grhIndex,
+            name: `Tile ${brush.paletteId}`,
+        });
+    };
+
+    const handleToggleFavorite = (
+        event: MouseEvent,
+        brush: TerrainBrush,
+    ) => {
+        event.stopPropagation();
+        toggleFavorite({
             kind: "terrain",
             id: brush.paletteId,
             grhIndex: brush.grhIndex,
@@ -156,41 +176,64 @@ export default function TerrainPalette() {
                     itemHeight={CELL_HEIGHT}
                     className="min-h-0 flex-1 pr-1"
                     getItemKey={(brush) => brush.paletteId}
-                    renderItem={(brush) => (
-                        <div className="p-[3px]">
-                            <button
-                                type="button"
-                                disabled={brush.grhIndex <= 0}
-                                onClick={() => handleSelect(brush)}
-                                title={
-                                    tab === "uploaded"
-                                        ? `Grafico subido ${brush.paletteId}`
-                                        : `Tile ${brush.paletteId}${brush.blocked ? " (bloqueado)" : ""}`
-                                }
-                                className={`flex w-full flex-col items-center gap-1 rounded-lg border p-1 transition disabled:opacity-40 ${
-                                    selectedPaletteId === brush.paletteId
-                                        ? "border-amber-400/70 bg-amber-400/15"
-                                        : "border-white/10 bg-stone-950/50 hover:border-white/25"
-                                } ${brush.blocked ? "ring-1 ring-red-500/40" : ""}`}
-                            >
-                                <GraphicPreview
-                                    grhIndex={brush.grhIndex}
-                                    size={56}
-                                    scale={1.4}
-                                />
-                                <span
-                                    className={`w-full truncate text-center text-[9px] ${
+                    renderItem={(brush) => {
+                        const favorited = isFavorite("terrain", brush.paletteId);
+
+                        return (
+                            <div className="group relative p-[3px]">
+                                <button
+                                    type="button"
+                                    disabled={brush.grhIndex <= 0}
+                                    onClick={() => handleSelect(brush)}
+                                    title={
                                         tab === "uploaded"
-                                            ? "text-cyan-300/70"
-                                            : "text-stone-500"
+                                            ? `Grafico subido ${brush.paletteId}`
+                                            : `Tile ${brush.paletteId}${brush.blocked ? " (bloqueado)" : ""}`
+                                    }
+                                    className={`flex w-full flex-col items-center gap-1 rounded-lg border p-1 transition disabled:opacity-40 ${
+                                        selectedPaletteId === brush.paletteId
+                                            ? "border-amber-400/70 bg-amber-400/15"
+                                            : "border-white/10 bg-stone-950/50 hover:border-white/25"
+                                    } ${brush.blocked ? "ring-1 ring-red-500/40" : ""}`}
+                                >
+                                    <GraphicPreview
+                                        grhIndex={brush.grhIndex}
+                                        size={56}
+                                        scale={1.4}
+                                    />
+                                    <span
+                                        className={`w-full truncate text-center text-[9px] ${
+                                            tab === "uploaded"
+                                                ? "text-cyan-300/70"
+                                                : "text-stone-500"
+                                        }`}
+                                    >
+                                        #{brush.paletteId}
+                                        {brush.blocked ? " ●" : ""}
+                                    </span>
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={brush.grhIndex <= 0}
+                                    onClick={(event) =>
+                                        handleToggleFavorite(event, brush)
+                                    }
+                                    title={
+                                        favorited
+                                            ? "Quitar de favoritos"
+                                            : "Agregar a favoritos"
+                                    }
+                                    className={`absolute right-1 top-1 z-10 text-[11px] transition ${
+                                        favorited
+                                            ? "text-amber-300"
+                                            : "text-stone-600 opacity-0 group-hover:opacity-100 hover:text-amber-200"
                                     }`}
                                 >
-                                    #{brush.paletteId}
-                                    {brush.blocked ? " ●" : ""}
-                                </span>
-                            </button>
-                        </div>
-                    )}
+                                    ★
+                                </button>
+                            </div>
+                        );
+                    }}
                 />
             )}
         </div>

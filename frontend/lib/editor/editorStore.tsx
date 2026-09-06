@@ -26,6 +26,12 @@ import {
     listEditorNpcs,
     listEditorObjects,
 } from "./editorApi";
+import {
+    isFavorite as isFavoriteEntry,
+    parseFavorites,
+    toggleFavoriteEntry,
+    type CatalogFavorite,
+} from "./catalogFilter";
 import { UPLOADED_GRAPHIC_INDEX_START } from "../../utils/gameLoader";
 
 /**
@@ -116,6 +122,9 @@ export type RecentsEntry = {
     name: string;
 };
 
+/** Favorito del editor; misma forma que un reciente (#29 favoritos). */
+export type FavoritesEntry = CatalogFavorite;
+
 type EditorStoreValue = {
     mapNum: number;
     setMapNum: (mapNum: number) => void;
@@ -129,6 +138,9 @@ type EditorStoreValue = {
     setTool: (tool: EditorTool | null) => void;
     recents: RecentsEntry[];
     addRecent: (entry: RecentsEntry) => void;
+    favorites: FavoritesEntry[];
+    toggleFavorite: (entry: FavoritesEntry) => void;
+    isFavorite: (kind: FavoritesEntry["kind"], id: number) => boolean;
     refreshMapData: () => Promise<void>;
     refreshStatus: () => Promise<void>;
     isLoading: boolean;
@@ -136,6 +148,7 @@ type EditorStoreValue = {
 };
 
 const RECENTS_STORAGE_KEY = "editor.recents.v1";
+const FAVORITES_STORAGE_KEY = "editor.favorites.v1";
 const DEFAULT_MAP_NUM = 1;
 
 const EditorStoreContext = createContext<EditorStoreValue | null>(null);
@@ -181,6 +194,33 @@ function writeRecentsToStorage(recents: RecentsEntry[]): void {
     }
 }
 
+function readFavoritesFromStorage(): FavoritesEntry[] {
+    if (typeof window === "undefined") {
+        return [];
+    }
+
+    try {
+        const raw = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
+        if (!raw) {
+            return [];
+        }
+        return parseFavorites(JSON.parse(raw) as unknown);
+    } catch {
+        return [];
+    }
+}
+
+function writeFavoritesToStorage(favorites: FavoritesEntry[]): void {
+    try {
+        window.localStorage.setItem(
+            FAVORITES_STORAGE_KEY,
+            JSON.stringify(favorites),
+        );
+    } catch {
+        // El almacenamiento puede estar lleno o bloqueado; se ignora.
+    }
+}
+
 export function EditorStoreProvider({
     initialMapNum = DEFAULT_MAP_NUM,
     children,
@@ -198,6 +238,9 @@ export function EditorStoreProvider({
     const [tool, setTool] = useState<EditorTool | null>(null);
     const [recents, setRecents] = useState<RecentsEntry[]>(() =>
         readRecentsFromStorage(),
+    );
+    const [favorites, setFavorites] = useState<FavoritesEntry[]>(() =>
+        readFavoritesFromStorage(),
     );
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -270,6 +313,20 @@ export function EditorStoreProvider({
         });
     }, []);
 
+    const toggleFavorite = useCallback((entry: FavoritesEntry) => {
+        setFavorites((current) => {
+            const next = toggleFavoriteEntry(current, entry);
+            writeFavoritesToStorage(next);
+            return next;
+        });
+    }, []);
+
+    const isFavorite = useCallback(
+        (kind: FavoritesEntry["kind"], id: number) =>
+            isFavoriteEntry(favorites, kind, id),
+        [favorites],
+    );
+
     useEffect(() => {
         let cancelled = false;
 
@@ -315,6 +372,9 @@ export function EditorStoreProvider({
             setTool,
             recents,
             addRecent,
+            favorites,
+            toggleFavorite,
+            isFavorite,
             refreshMapData,
             refreshStatus,
             isLoading,
@@ -323,6 +383,8 @@ export function EditorStoreProvider({
         [
             addRecent,
             entities,
+            favorites,
+            isFavorite,
             isLoading,
             loadError,
             mapNum,
@@ -335,6 +397,7 @@ export function EditorStoreProvider({
             setMapNum,
             status,
             terrain,
+            toggleFavorite,
             tool,
         ],
     );
