@@ -348,3 +348,32 @@ export async function isGameDataAdmin(): Promise<boolean> {
         return false;
     }
 }
+
+export type PaletteEntryInput = {
+    id?: number;
+    graphics: Array<number | null>;
+    blocked?: boolean;
+};
+
+/** Crea o actualiza una entrada de paleta (#6). */
+export async function upsertPaletteEntry(
+    mapNum: number,
+    entry: PaletteEntryInput,
+): Promise<{ status: number; ok: boolean; data: { entry?: TerrainPaletteEntry; error?: string } }> {
+    return requestJson(editorPath(`maps/${mapNum}/palette`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(entry),
+    });
+}
+
+/** Elimina una entrada de paleta override. */
+export async function deletePaletteEntry(
+    mapNum: number,
+    paletteId: number,
+): Promise<{ status: number; ok: boolean; data: { removed?: boolean; error?: string } }> {
+    return requestJson(editorPath(`maps/${mapNum}/palette/${paletteId}`), {
+        method: "DELETE",
+    });
+}
+

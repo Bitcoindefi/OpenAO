@@ -101,6 +101,7 @@ import {
     getGraphicContent,
     getMapStatus,
     getMapTerrainPalette,
+    getSourcePaletteMaxId,
     listGraphics,
     listMapOverrides,
     listMapTileEntities,
@@ -113,6 +114,13 @@ import {
     tileEntitySchema,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import {
+    PaletteValidationError,
+    deletePaletteEntry,
+    listUploadedGraphicsIndex,
+    paletteEntrySchema,
+    upsertPaletteEntry,
+} from "./repositories/worldBuilderPalette";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -816,6 +824,23 @@ app.get("/game-data/graphics", async (_request, response) => {
 });
 
 /**
+ * Indice de graficos subidos con forma graficos.json (#6).
+ * El cliente puede mergearlo al catalogo sin transformar metadatos.
+ */
+app.get("/game-data/graphics/index", async (_request, response) => {
+    try {
+        response.json({
+            graphics: await listUploadedGraphicsIndex(500),
+            uploadedGraphicIndexStart: 1_000_000,
+        });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
  * Sirve un grafico subido. Es publico a proposito: cualquier jugador que entre
  * a un mapa editado necesita poder descargarlo, igual que los graficos
  * originales.
@@ -1130,6 +1155,102 @@ app.get(
             response
                 .status(message.startsWith("El mapa") ? 404 : 400)
                 .json({ error: message });
+        }
+    },
+);
+
+/**
+ * Crea o actualiza una entrada de paleta (#6): capas + blocked, con validacion
+ * de que cada grafico exista en el motor o en assets subidos.
+ */
+app.put(
+    "/admin/game-data/maps/:mapNum/palette",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+
+            if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                response.status(400).json({ error: "Numero de mapa invalido." });
+                return;
+            }
+
+            const parsed = paletteEntrySchema.safeParse(request.body);
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            const sourceMaxId = await getSourcePaletteMaxId(mapNum);
+            const entry = await upsertPaletteEntry(
+                mapNum,
+                parsed.data,
+                authorized.session.account._id,
+                sourceMaxId,
+            );
+
+            response.json({ mapNum, entry });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            const status =
+                error instanceof PaletteValidationError
+                    ? 400
+                    : message.startsWith("El mapa")
+                      ? 404
+                      : 400;
+            response.status(status).json({ error: message });
+        }
+    },
+);
+
+/** Elimina una entrada de paleta override (no toca terrain.json fuente). */
+app.delete(
+    "/admin/game-data/maps/:mapNum/palette/:paletteId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const paletteId = Number.parseInt(
+                request.params.paletteId ?? "",
+                10,
+            );
+
+            if (
+                !Number.isInteger(mapNum) ||
+                mapNum <= 0 ||
+                !Number.isInteger(paletteId) ||
+                paletteId <= 0
+            ) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+
+            const removed = await deletePaletteEntry(mapNum, paletteId);
+
+            if (!removed) {
+                response.status(404).json({ error: "Entrada de paleta no encontrada." });
+                return;
+            }
+
+            response.json({ mapNum, paletteId, removed: true });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
         }
     },
 );

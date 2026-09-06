@@ -652,3 +652,21 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+-- Entradas de paleta dinamicas por mapa (#6).
+-- No reescriben terrain.json: se fusionan en getMapTerrainPalette.
+-- graphics es JSONB para preservar capas nulas como en el terrain fuente.
+CREATE TABLE IF NOT EXISTS game_map_palette_overrides (
+    map_num INTEGER NOT NULL CHECK (map_num > 0),
+    palette_id INTEGER NOT NULL CHECK (palette_id > 0),
+    graphics JSONB NOT NULL,
+    blocked BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (map_num, palette_id),
+    CONSTRAINT game_map_palette_overrides_graphics_is_array
+        CHECK (jsonb_typeof(graphics) = 'array')
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_palette_overrides_map
+    ON game_map_palette_overrides(map_num);
