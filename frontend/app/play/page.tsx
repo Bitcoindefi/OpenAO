@@ -2796,6 +2796,14 @@ function HomeContent() {
                                     open={mapEditOpen}
                                     onOpenChange={setMapEditOpen}
                                     playersOnMap={playersOnMap}
+                                    canvasWidth={
+                                        hudLayout.canvasWidth ??
+                                        CANVAS_BASE_WIDTH
+                                    }
+                                    canvasHeight={
+                                        hudLayout.canvasHeight ??
+                                        CANVAS_BASE_HEIGHT
+                                    }
                                 />
 
                                 {!arenaMode &&

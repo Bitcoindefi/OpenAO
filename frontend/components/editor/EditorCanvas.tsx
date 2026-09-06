@@ -21,11 +21,7 @@ import {
     resolveGraphicFrame,
 } from "../../lib/graphicTextures";
 import { getBottomAnchoredGraphicPosition } from "../game/rendering/characterLayout";
-import type {
-    MapTileEntity,
-    MapTileOverride,
-    TilePaint,
-} from "../../lib/editor/editorApi";
+import type { MapTileEntity, TilePaint } from "../../lib/editor/editorApi";
 import {
     clearTileOverride,
     paintTiles,
@@ -76,55 +72,6 @@ const texturePromiseCache = new Map<number, Promise<void>>();
 
 function tileKey(x: number, y: number): string {
     return `${x},${y}`;
-}
-
-function paintKey(x: number, y: number, layer: number): string {
-    return `${x},${y},${layer}`;
-}
-
-function previousPaintForTile(
-    tile: TilePaint,
-    overrides: MapTileOverride[],
-    mapData: MapData | null,
-    mapNum: number,
-): TilePaint {
-    const override = overrides.find(
-        (entry) =>
-            entry.x === tile.x &&
-            entry.y === tile.y &&
-            entry.layer === tile.layer,
-    );
-
-    if (override) {
-        return {
-            x: tile.x,
-            y: tile.y,
-            layer: tile.layer,
-            grhIndex: override.grhIndex,
-            blocked: override.blocked,
-        };
-    }
-
-    if (!hasMapTiles(mapData, mapNum)) {
-        return {
-            x: tile.x,
-            y: tile.y,
-            layer: tile.layer,
-            grhIndex: null,
-            blocked: null,
-        };
-    }
-
-    const baseTile = getTileAt(mapData, mapNum, tile.x, tile.y);
-    const grh = Number(baseTile?.graphics?.[String(tile.layer)] ?? 0);
-
-    return {
-        x: tile.x,
-        y: tile.y,
-        layer: tile.layer,
-        grhIndex: grh > 0 ? grh : null,
-        blocked: tile.layer === 1 ? Boolean(baseTile?.blocked) : null,
-    };
 }
 
 /**
@@ -824,20 +771,7 @@ export default function EditorCanvas({
 
         const inverse =
             tiles.length > 0 && !skipHistoryRef.current
-                ? buildInverseTiles(
-                      tiles,
-                      new Map(
-                          tiles.map((tile) => [
-                              paintKey(tile.x, tile.y, tile.layer),
-                              previousPaintForTile(
-                                  tile,
-                                  overrides,
-                                  mapData,
-                                  mapNum,
-                              ),
-                          ]),
-                      ),
-                  )
+                ? buildInverseTiles(tiles, overrides)
                 : null;
 
         try {
@@ -870,7 +804,7 @@ export default function EditorCanvas({
             applyingRef.current = false;
             setIsApplying(false);
         }
-    }, [mapData, mapNum, overrides, refreshMapData, refreshStatus]);
+    }, [mapNum, overrides, refreshMapData, refreshStatus]);
 
     useEffect(() => {
         flushRef.current = flushPending;

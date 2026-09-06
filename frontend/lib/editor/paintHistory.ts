@@ -1,10 +1,20 @@
 import type { TilePaint } from "./editorApi";
 
+export const MAX_STROKES = 50;
+
 export type PaintSnapshot = {
     canUndo: boolean;
     canRedo: boolean;
     undoCount: number;
     redoCount: number;
+};
+
+export type PaintOverride = {
+    x: number;
+    y: number;
+    layer: number;
+    grhIndex: number | null;
+    blocked?: boolean | null;
 };
 
 type PaintStroke = {
@@ -19,6 +29,9 @@ function tilePaintKey(tile: Pick<TilePaint, "x" | "y" | "layer">): string {
 /**
  * Historial de trazos de terreno: cada push guarda el lote aplicado y su
  * inverso, para deshacer / rehacer sin preguntarle otra vez al servidor.
+ *
+ * El tope `MAX_STROKES` recorta los trazos mas viejos: el editor no necesita
+ * un undo infinito y el lote de un mapa grande ya pesa.
  */
 export class PaintHistory {
     #undo: PaintStroke[] = [];
@@ -30,6 +43,11 @@ export class PaintHistory {
         }
 
         this.#undo.push({ tiles, inverse });
+
+        if (this.#undo.length > MAX_STROKES) {
+            this.#undo.shift();
+        }
+
         this.#redo = [];
     }
 
@@ -71,17 +89,23 @@ export class PaintHistory {
 }
 
 /**
- * Invierte un lote de pintura contra el estado anterior de cada tile.
+ * Invierte un lote de pintura contra los overrides actuales.
  *
- * Si no hay entrada previa, el inverso vacia la capa (`grhIndex` y `blocked`
- * en `null`) para que deshacer no deje el grafico nuevo.
+ * Si el tile ya tenia un override, el inverso restaura ese grafico. Si no,
+ * `grhIndex` y `blocked` van en `null` para vaciar la capa.
  */
 export function buildInverseTiles(
-    applied: TilePaint[],
-    previous: ReadonlyMap<string, TilePaint>,
+    forward: TilePaint[],
+    overrides: readonly PaintOverride[],
 ): TilePaint[] {
-    return applied.map((tile) => {
-        const prior = previous.get(tilePaintKey(tile));
+    const previousByKey = new Map<string, PaintOverride>();
+
+    for (const override of overrides) {
+        previousByKey.set(tilePaintKey(override), override);
+    }
+
+    return forward.map((tile) => {
+        const prior = previousByKey.get(tilePaintKey(tile));
 
         return {
             x: tile.x,
@@ -95,15 +119,15 @@ export function buildInverseTiles(
 
 /** Tiles de un rectangulo inclusivo, en cualquier direccion de arrastre. */
 export function tilesInRect(
+    x0: number,
+    y0: number,
     x1: number,
     y1: number,
-    x2: number,
-    y2: number,
 ): Array<{ x: number; y: number }> {
-    const minX = Math.min(x1, x2);
-    const maxX = Math.max(x1, x2);
-    const minY = Math.min(y1, y2);
-    const maxY = Math.max(y1, y2);
+    const minX = Math.min(x0, x1);
+    const maxX = Math.max(x0, x1);
+    const minY = Math.min(y0, y1);
+    const maxY = Math.max(y0, y1);
     const tiles: Array<{ x: number; y: number }> = [];
 
     for (let y = minY; y <= maxY; y += 1) {

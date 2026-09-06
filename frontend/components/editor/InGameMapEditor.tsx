@@ -16,7 +16,7 @@ import NpcsBrowser from "./NpcsBrowser";
 const EditorCanvas = dynamic(() => import("./EditorCanvas"), {
     ssr: false,
     loading: () => (
-        <div className="flex h-[400px] w-full items-center justify-center rounded-2xl border border-white/10 bg-stone-950 text-xs text-stone-500">
+        <div className="flex h-full w-full items-center justify-center rounded-2xl border border-white/10 bg-stone-950 text-xs text-stone-500">
             Cargando lienzo del editor...
         </div>
     ),
@@ -29,9 +29,11 @@ type InGameMapEditorProps = {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     playersOnMap: number;
+    canvasWidth: number;
+    canvasHeight: number;
 };
 
-function EditorPanels() {
+function EditorPanels({ height }: { height: number }) {
     const { isLoading, loadError } = useEditorStore();
     const [activeTab, setActiveTab] = useState<PanelTab>("terrain");
 
@@ -42,7 +44,10 @@ function EditorPanels() {
     ];
 
     return (
-        <aside className="flex h-[400px] w-56 shrink-0 flex-col rounded-2xl border border-white/10 bg-stone-950/80 backdrop-blur-md">
+        <aside
+            className="flex w-56 shrink-0 flex-col rounded-2xl border border-white/10 bg-stone-950/80 backdrop-blur-md"
+            style={{ height }}
+        >
             <div className="flex border-b border-white/10">
                 {tabs.map((tab) => (
                     <button
@@ -81,13 +86,17 @@ function EditorPanels() {
     );
 }
 
-function InGameMapEditorSession({
+function InGameEditorBody({
     mapNum,
     playersOnMap,
+    canvasWidth,
+    canvasHeight,
     onClose,
 }: {
     mapNum: number;
     playersOnMap: number;
+    canvasWidth: number;
+    canvasHeight: number;
     onClose: () => void;
 }) {
     const { mapNum: editorMapNum, setMapNum } = useEditorStore();
@@ -127,9 +136,9 @@ function InGameMapEditorSession({
             <EditorToolbar playersOnMap={playersOnMap} showMapInput={false} />
 
             <div className="flex min-h-0 flex-1 gap-2">
-                <EditorPanels />
+                <EditorPanels height={canvasHeight} />
                 <div className="min-w-0 flex-1 overflow-auto">
-                    <EditorCanvas width={620} height={400} />
+                    <EditorCanvas width={canvasWidth} height={canvasHeight} />
                 </div>
             </div>
 
@@ -147,6 +156,8 @@ export default function InGameMapEditor({
     open,
     onOpenChange,
     playersOnMap,
+    canvasWidth,
+    canvasHeight,
 }: InGameMapEditorProps) {
     const adminState = useGameDataAdmin();
 
@@ -169,9 +180,11 @@ export default function InGameMapEditor({
     return (
         <EditorStoreProvider initialMapNum={mapNum}>
             <Suspense fallback={null}>
-                <InGameMapEditorSession
+                <InGameEditorBody
                     mapNum={mapNum}
                     playersOnMap={playersOnMap}
+                    canvasWidth={canvasWidth}
+                    canvasHeight={canvasHeight}
                     onClose={() => onOpenChange(false)}
                 />
             </Suspense>
