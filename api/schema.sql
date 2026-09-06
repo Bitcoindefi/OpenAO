@@ -652,3 +652,9 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+-- #9 floor-object amount + door/sign meta
+ALTER TABLE game_map_tile_entities
+    ADD COLUMN IF NOT EXISTS amount INTEGER NOT NULL DEFAULT 1 CHECK (amount > 0);
+ALTER TABLE game_map_tile_entities
+    ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;

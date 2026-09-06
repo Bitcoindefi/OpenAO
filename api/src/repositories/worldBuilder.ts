@@ -25,6 +25,8 @@ export type TileEntityPlacement = {
     y: number;
     kind: TileEntityKind;
     entityId: number;
+    amount?: number;
+    meta?: Record<string, unknown>;
 };
 
 export type UploadedGraphic = {
@@ -422,11 +424,11 @@ export async function listMapTileEntities(
     includeDrafts = false,
 ): Promise<MapTileEntity[]> {
     const query = includeDrafts
-        ? `SELECT DISTINCT ON (x, y, kind) x, y, kind, entity_id, status
+        ? `SELECT DISTINCT ON (x, y, kind) x, y, kind, entity_id, amount, meta, status
            FROM game_map_tile_entities
            WHERE map_num = $1
            ORDER BY x, y, kind, status ASC`
-        : `SELECT x, y, kind, entity_id, status
+        : `SELECT x, y, kind, entity_id, amount, meta, status
            FROM game_map_tile_entities
            WHERE map_num = $1 AND status = 'published'
            ORDER BY y, x, kind`;
@@ -436,6 +438,8 @@ export async function listMapTileEntities(
         y: number;
         kind: string;
         entity_id: number;
+        amount: number;
+        meta: Record<string, unknown> | null;
         status: string;
     }>(query, [mapNum]);
 
@@ -444,6 +448,8 @@ export async function listMapTileEntities(
         y: row.y,
         kind: row.kind as TileEntityKind,
         entityId: row.entity_id,
+        amount: row.amount ?? 1,
+        meta: (row.meta as Record<string, unknown> | null) ?? {},
         status: row.status as "draft" | "published",
     }));
 }
@@ -479,12 +485,14 @@ export async function publishMap(
 
         const entitiesResult = await client.query(
             `INSERT INTO game_map_tile_entities
-                 (map_num, x, y, kind, entity_id, status, updated_by_account_id, updated_at)
-             SELECT map_num, x, y, kind, entity_id, 'published', $2, NOW()
+                 (map_num, x, y, kind, entity_id, amount, meta, status, updated_by_account_id, updated_at)
+             SELECT map_num, x, y, kind, entity_id, amount, meta, 'published', $2, NOW()
              FROM game_map_tile_entities
              WHERE map_num = $1 AND status = 'draft'
              ON CONFLICT (map_num, x, y, kind, status) DO UPDATE
              SET entity_id = EXCLUDED.entity_id,
+                 amount = EXCLUDED.amount,
+                 meta = EXCLUDED.meta,
                  updated_by_account_id = EXCLUDED.updated_by_account_id,
                  updated_at = NOW()`,
             [mapNum, accountId],
