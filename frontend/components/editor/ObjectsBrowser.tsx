@@ -1,7 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { getObjectType, OBJECT_TYPES } from "../../data/objectTypes";
+import {
+    countByObjType,
+    filterObjects,
+} from "../../lib/editor/catalogFilter";
 import type { EditorObject } from "../../lib/editor/editorApi";
 import { useEditorStore } from "../../lib/editor/editorStore";
 import GraphicPreview from "./GraphicPreview";
@@ -10,53 +14,52 @@ import VirtualizedList from "./VirtualizedList";
 const ITEM_HEIGHT = 56;
 
 /**
- * Catalogo de objetos del juego con busqueda y filtro por tipo.
+ * Catalogo de objetos del juego con busqueda, filtro por tipo y favoritos.
  *
  * Al seleccionar un objeto se activa la herramienta de colocacion y se suma
  * al historial de recientes.
  */
 export default function ObjectsBrowser() {
-    const { objects, tool, setTool, addRecent } = useEditorStore();
+    const {
+        objects,
+        tool,
+        setTool,
+        addRecent,
+        toggleFavorite,
+        isFavorite,
+    } = useEditorStore();
     const [search, setSearch] = useState("");
     const [objTypeFilter, setObjTypeFilter] = useState<number | null>(null);
-    const normalizedSearch = search.trim().toLowerCase();
 
-    // Un recorrido por tipo y no un filter por chip: son 37 chips sobre mil
-    // objetos, y se recalculaba entero en cada tecla de la busqueda.
-    const countsByType = useMemo(() => {
-        const counts = new Map<number, number>();
+    const countsByType = useMemo(() => countByObjType(objects), [objects]);
 
-        for (const entry of objects) {
-            counts.set(entry.objType, (counts.get(entry.objType) ?? 0) + 1);
-        }
+    const filteredObjects = useMemo(
+        () =>
+            filterObjects(objects, {
+                query: search,
+                objType: objTypeFilter,
+            }),
+        [objTypeFilter, objects, search],
+    );
 
-        return counts;
-    }, [objects]);
-
-    const filteredObjects = useMemo(() => {
-        let result = objects;
-
-        if (objTypeFilter !== null) {
-            result = result.filter((entry) => entry.objType === objTypeFilter);
-        }
-
-        if (normalizedSearch) {
-            result = result.filter(
-                (entry) =>
-                    entry.name.toLowerCase().includes(normalizedSearch) ||
-                    String(entry.id).includes(normalizedSearch),
-            );
-        }
-
-        return result;
-    }, [normalizedSearch, objTypeFilter, objects]);
-
-    const selectedId =
-        tool?.kind === "object" ? tool.object.id : null;
+    const selectedId = tool?.kind === "object" ? tool.object.id : null;
 
     const handleSelect = (entry: EditorObject) => {
         setTool({ kind: "object", object: entry });
         addRecent({
+            kind: "object",
+            id: entry.id,
+            grhIndex: entry.grhIndex,
+            name: entry.name,
+        });
+    };
+
+    const handleToggleFavorite = (
+        event: MouseEvent,
+        entry: EditorObject,
+    ) => {
+        event.stopPropagation();
+        toggleFavorite({
             kind: "object",
             id: entry.id,
             grhIndex: entry.grhIndex,
@@ -130,39 +133,62 @@ export default function ObjectsBrowser() {
                     renderItem={(entry) => {
                         const type = getObjectType(entry.objType);
                         const isSelected = selectedId === entry.id;
+                        const favorited = isFavorite("object", entry.id);
 
                         return (
-                            <button
-                                type="button"
-                                onClick={() => handleSelect(entry)}
-                                className={`flex h-[52px] w-full items-center gap-2 rounded-lg border px-2 text-left transition ${
+                            <div
+                                className={`group relative flex h-[52px] w-full items-center gap-2 rounded-lg border px-2 transition ${
                                     isSelected
                                         ? "border-amber-400/70 bg-amber-400/15"
                                         : "border-transparent bg-stone-950/40 hover:border-white/10 hover:bg-stone-900/70"
                                 }`}
                             >
-                                <GraphicPreview
-                                    grhIndex={entry.grhIndex}
-                                    size={44}
-                                    scale={1.6}
-                                />
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-xs font-medium text-stone-200">
-                                        {entry.name}
-                                    </p>
-                                    <p className="flex items-center gap-1.5 text-[10px] text-stone-500">
-                                        <span
-                                            className="inline-block h-1.5 w-1.5 rounded-full"
-                                            style={{
-                                                backgroundColor:
-                                                    type?.color ?? "#78716c",
-                                            }}
-                                        />
-                                        #{entry.id}
-                                        {type ? ` - ${type.label}` : ""}
-                                    </p>
-                                </div>
-                            </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleSelect(entry)}
+                                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                >
+                                    <GraphicPreview
+                                        grhIndex={entry.grhIndex}
+                                        size={44}
+                                        scale={1.6}
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate text-xs font-medium text-stone-200">
+                                            {entry.name}
+                                        </p>
+                                        <p className="flex items-center gap-1.5 text-[10px] text-stone-500">
+                                            <span
+                                                className="inline-block h-1.5 w-1.5 rounded-full"
+                                                style={{
+                                                    backgroundColor:
+                                                        type?.color ?? "#78716c",
+                                                }}
+                                            />
+                                            #{entry.id}
+                                            {type ? ` - ${type.label}` : ""}
+                                        </p>
+                                    </div>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={(event) =>
+                                        handleToggleFavorite(event, entry)
+                                    }
+                                    title={
+                                        favorited
+                                            ? "Quitar de favoritos"
+                                            : "Agregar a favoritos"
+                                    }
+                                    className={`shrink-0 px-1 text-sm transition ${
+                                        favorited
+                                            ? "text-amber-300"
+                                            : "text-stone-600 opacity-0 group-hover:opacity-100 hover:text-amber-200"
+                                    }`}
+                                >
+                                    ★
+                                </button>
+                            </div>
                         );
                     }}
                     itemHeight={ITEM_HEIGHT}

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import type { BodiesDB, HeadsDB } from "../../types/game";
+import { filterByNameOrId } from "../../lib/editor/catalogFilter";
 import type { EditorNpc } from "../../lib/editor/editorApi";
 import { useEditorStore } from "../../lib/editor/editorStore";
 import {
@@ -23,12 +24,17 @@ const ITEM_HEIGHT = 76;
  * contexto WebGL- por fila, y el navegador mantiene vivos apenas unos quince.
  */
 export default function NpcsBrowser() {
-    const { npcs, tool, setTool, addRecent } = useEditorStore();
+    const {
+        npcs,
+        tool,
+        setTool,
+        addRecent,
+        toggleFavorite,
+        isFavorite,
+    } = useEditorStore();
     const [search, setSearch] = useState("");
     const [bodiesDB, setBodiesDB] = useState<BodiesDB | null>(null);
     const [headsDB, setHeadsDB] = useState<HeadsDB | null>(null);
-    const normalizedSearch = search.trim().toLowerCase();
-
     useEffect(() => {
         let cancelled = false;
 
@@ -48,17 +54,10 @@ export default function NpcsBrowser() {
         };
     }, []);
 
-    const filteredNpcs = useMemo(() => {
-        if (!normalizedSearch) {
-            return npcs;
-        }
-
-        return npcs.filter(
-            (entry) =>
-                entry.name.toLowerCase().includes(normalizedSearch) ||
-                String(entry.id).includes(normalizedSearch),
-        );
-    }, [normalizedSearch, npcs]);
+    const filteredNpcs = useMemo(
+        () => filterByNameOrId(npcs, search),
+        [npcs, search],
+    );
 
     const selectedId = tool?.kind === "npc" ? tool.npc.id : null;
 
@@ -96,6 +95,20 @@ export default function NpcsBrowser() {
         }
     };
 
+    const handleToggleFavorite = (
+        event: MouseEvent,
+        entry: EditorNpc,
+        grhIndex: number,
+    ) => {
+        event.stopPropagation();
+        toggleFavorite({
+            kind: "npc",
+            id: entry.id,
+            grhIndex,
+            name: entry.name,
+        });
+    };
+
     return (
         <div className="flex h-full min-h-0 flex-col gap-2">
             <input
@@ -116,37 +129,65 @@ export default function NpcsBrowser() {
                     getItemKey={(entry) => entry.id}
                     renderItem={(entry) => {
                         const isSelected = selectedId === entry.id;
+                        const previewGrh = resolveCharacterThumbnailGrh(
+                            bodiesDB,
+                            headsDB,
+                            entry.idBody,
+                            entry.idHead,
+                        );
+                        const favorited = isFavorite("npc", entry.id);
 
                         return (
-                            <button
-                                type="button"
-                                onClick={() => void handleSelect(entry)}
-                                className={`flex h-[72px] w-full items-center gap-2 rounded-lg border px-2 text-left transition ${
+                            <div
+                                className={`group relative flex h-[72px] w-full items-center gap-2 rounded-lg border px-2 transition ${
                                     isSelected
                                         ? "border-amber-400/70 bg-amber-400/15"
                                         : "border-transparent bg-stone-950/40 hover:border-white/10 hover:bg-stone-900/70"
                                 }`}
                             >
-                                <GraphicPreview
-                                    grhIndex={resolveCharacterThumbnailGrh(
-                                        bodiesDB,
-                                        headsDB,
-                                        entry.idBody,
-                                        entry.idHead,
-                                    )}
-                                    size={56}
-                                    scale={1.8}
-                                />
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-xs font-medium text-stone-200">
-                                        {entry.name}
-                                    </p>
-                                    <p className="text-[10px] text-stone-500">
-                                        #{entry.id} - Cuerpo {entry.idBody} / Cabeza{" "}
-                                        {entry.idHead}
-                                    </p>
-                                </div>
-                            </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleSelect(entry)}
+                                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                >
+                                    <GraphicPreview
+                                        grhIndex={previewGrh}
+                                        size={56}
+                                        scale={1.8}
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate text-xs font-medium text-stone-200">
+                                            {entry.name}
+                                        </p>
+                                        <p className="text-[10px] text-stone-500">
+                                            #{entry.id} - Cuerpo {entry.idBody} / Cabeza{" "}
+                                            {entry.idHead}
+                                        </p>
+                                    </div>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={(event) =>
+                                        handleToggleFavorite(
+                                            event,
+                                            entry,
+                                            previewGrh,
+                                        )
+                                    }
+                                    title={
+                                        favorited
+                                            ? "Quitar de favoritos"
+                                            : "Agregar a favoritos"
+                                    }
+                                    className={`shrink-0 px-1 text-sm transition ${
+                                        favorited
+                                            ? "text-amber-300"
+                                            : "text-stone-600 opacity-0 group-hover:opacity-100 hover:text-amber-200"
+                                    }`}
+                                >
+                                    ★
+                                </button>
+                            </div>
                         );
                     }}
                     itemHeight={ITEM_HEIGHT}

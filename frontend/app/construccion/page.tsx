@@ -7,6 +7,7 @@ import { EditorStoreProvider, useEditorStore } from "../../lib/editor/editorStor
 import { useGameDataAdmin } from "../../lib/editor/useGameDataAdmin";
 import EditorToolbar from "../../components/editor/EditorToolbar";
 import RecentsStrip from "../../components/editor/RecentsStrip";
+import FavoritesStrip from "../../components/editor/FavoritesStrip";
 import TerrainPalette from "../../components/editor/TerrainPalette";
 import ObjectsBrowser from "../../components/editor/ObjectsBrowser";
 import NpcsBrowser from "../../components/editor/NpcsBrowser";
@@ -99,6 +100,7 @@ function ConstruccionEditor() {
                 </main>
             </div>
 
+            <FavoritesStrip />
             <RecentsStrip />
         </div>
     );
