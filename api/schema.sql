@@ -650,5 +650,10 @@ CREATE TABLE IF NOT EXISTS game_map_tile_entities (
 
 CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
+
+-- #8 NPC movement pattern (+ future entity extras). Safe if #9 already added meta.
+ALTER TABLE game_map_tile_entities
+    ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
