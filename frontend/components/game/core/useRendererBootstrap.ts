@@ -1,6 +1,13 @@
 /* eslint-disable react-hooks/immutability */
 import { useEffect, type RefObject } from "react";
 import {
+    expandBoundsByRadius,
+    isLowEndClient,
+    resolveClientMaxFps,
+    splitRowChunks,
+    waitForIdle,
+} from "../../../lib/clientPerf";
+import {
     Application,
     Container,
     FederatedPointerEvent,
@@ -348,6 +355,26 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                                 2,
                             ),
                             autoDensity: true,
+                        });
+                        const connection =
+                            typeof navigator !== "undefined"
+                                ? (
+                                      navigator as Navigator & {
+                                          connection?: {
+                                              saveData?: boolean;
+                                              effectiveType?: string;
+                                          };
+                                      }
+                                  ).connection
+                                : undefined;
+                        const batterySaver =
+                            typeof window !== "undefined" &&
+                            window.localStorage?.getItem(
+                                "openao.perf.batterySaver",
+                            ) === "1";
+                        app.ticker.maxFPS = resolveClientMaxFps({
+                            batterySaver,
+                            connection,
                         });
                         return app;
                     } catch (error) {
@@ -776,11 +803,12 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     fill: 0xffffff,
                     stroke: { color: 0x000000, width: 1.5 },
                 });
+                const hudTextResolution = app.renderer.resolution || 1;
                 const fpsText = new Text({
                     text: options.fpsDisplayTextRef.current,
                     style: fpsStyle,
                 });
-                fpsText.resolution = 1;
+                fpsText.resolution = hudTextResolution;
                 fpsText.x = 10;
                 fpsText.y = 8;
                 fpsText.zIndex = 1000;
@@ -790,7 +818,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: options.pingDisplayTextRef.current,
                     style: fpsStyle,
                 });
-                pingText.resolution = 1;
+                pingText.resolution = hudTextResolution;
                 pingText.x = 10;
                 pingText.y = 22;
                 pingText.zIndex = 1000;
@@ -800,7 +828,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: "",
                     style: getHudStatusTextStyle(0xff3b30),
                 });
-                seguroText.resolution = 1;
+                seguroText.resolution = hudTextResolution;
                 seguroText.x = 10;
                 seguroText.y = 36;
                 seguroText.zIndex = 1000;
@@ -810,7 +838,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: "",
                     style: getHudStatusTextStyle(0xff3b30),
                 });
-                clanSeguroText.resolution = 1;
+                clanSeguroText.resolution = hudTextResolution;
                 clanSeguroText.x = 10;
                 clanSeguroText.y = 50;
                 clanSeguroText.zIndex = 1000;
@@ -825,7 +853,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                         stroke: { color: 0x000000, width: 1.5 },
                     }),
                 });
-                debugCombatText.resolution = 1;
+                debugCombatText.resolution = hudTextResolution;
                 debugCombatText.x = 10;
                 debugCombatText.y = 50;
                 debugCombatText.zIndex = 1000;
@@ -883,66 +911,117 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     );
                 }
 
-                window.setTimeout(() => {
-                    if (!engine.isDestroyed) {
-                        const pendingSnapshot =
-                            options.pendingUserSnapshotRef.current?.map ===
-                            options.mapNumber
-                                ? options.pendingUserSnapshotRef.current
-                                : null;
+                void (async () => {
+                    await waitForIdle();
+                    if (engine.isDestroyed) {
+                        return;
+                    }
 
-                        if (pendingSnapshot) {
-                            void options
-                                .applyOwnCharacterSnapshot(
-                                    engine,
-                                    pendingSnapshot,
-                                )
-                                .catch((error) => {
-                                    console.warn(
-                                        "Failed to sync own character snapshot after base scene render:",
-                                        error,
-                                    );
-                                });
-                        }
+                    const pendingSnapshot =
+                        options.pendingUserSnapshotRef.current?.map ===
+                        options.mapNumber
+                            ? options.pendingUserSnapshotRef.current
+                            : null;
 
-                        options.updateLoadingProgress(
-                            "Renderizando mundo",
-                            82,
-                            "Completando resto del mapa actual...",
-                        );
-
-                        options
-                            .renderMap(engine, {
-                                includeLayers: ["1", "2"],
-                                includeObjects: false,
-                                excludeBounds:
-                                    initialVisibleBounds ?? undefined,
-                            })
-                            .then(() =>
-                                options.renderMap(engine, {
-                                    includeLayers: ["3", "4"],
-                                    includeObjects: true,
-                                    excludeBounds:
-                                        initialVisibleBounds ?? undefined,
-                                }),
+                    if (pendingSnapshot) {
+                        void options
+                            .applyOwnCharacterSnapshot(
+                                engine,
+                                pendingSnapshot,
                             )
-                            .then(() =>
-                                options.warmCommonCharacterAssets(engine),
-                            )
-                            .then(() => options.prefetchNearbyMaps(engine))
                             .catch((error) => {
                                 console.warn(
-                                    "Failed to finish deferred scene enhancement:",
+                                    "Failed to sync own character snapshot after base scene render:",
                                     error,
                                 );
-                            })
-                            .finally(() => {
-                                if (!engine.isDestroyed) {
-                                    options.clearLoadingProgress();
-                                }
                             });
                     }
-                }, 0);
+
+                    options.updateLoadingProgress(
+                        "Renderizando mundo",
+                        82,
+                        "Completando resto del mapa actual...",
+                    );
+
+                    try {
+                        const mapWidth = engine.mapDimensions?.width ?? 100;
+                        const mapHeight = engine.mapDimensions?.height ?? 100;
+                        const lowEnd = isLowEndClient(
+                            typeof navigator !== "undefined"
+                                ? (navigator as Navigator & {
+                                      deviceMemory?: number;
+                                      hardwareConcurrency?: number;
+                                  })
+                                : null,
+                        );
+
+                        const groundChunks = splitRowChunks(1, mapHeight);
+                        for (const chunk of groundChunks) {
+                            if (engine.isDestroyed) return;
+                            await waitForIdle();
+                            await options.renderMap(engine, {
+                                includeLayers: ["1", "2"],
+                                includeObjects: false,
+                                bounds: {
+                                    minX: 1,
+                                    maxX: mapWidth,
+                                    minY: chunk.minY,
+                                    maxY: chunk.maxY,
+                                },
+                                excludeBounds:
+                                    initialVisibleBounds ?? undefined,
+                            });
+                        }
+
+                        const upperBounds =
+                            lowEnd && initialVisibleBounds
+                                ? expandBoundsByRadius(
+                                      initialVisibleBounds,
+                                      12,
+                                      mapWidth,
+                                      mapHeight,
+                                  )
+                                : {
+                                      minX: 1,
+                                      maxX: mapWidth,
+                                      minY: 1,
+                                      maxY: mapHeight,
+                                  };
+
+                        const upperChunks = splitRowChunks(
+                            upperBounds.minY,
+                            upperBounds.maxY,
+                        );
+                        for (const chunk of upperChunks) {
+                            if (engine.isDestroyed) return;
+                            await waitForIdle();
+                            await options.renderMap(engine, {
+                                includeLayers: ["3", "4"],
+                                includeObjects: true,
+                                bounds: {
+                                    minX: upperBounds.minX,
+                                    maxX: upperBounds.maxX,
+                                    minY: chunk.minY,
+                                    maxY: chunk.maxY,
+                                },
+                                excludeBounds:
+                                    initialVisibleBounds ?? undefined,
+                            });
+                        }
+
+                        await options.warmCommonCharacterAssets(engine);
+                        await options.prefetchNearbyMaps(engine);
+                    } catch (error) {
+                        console.warn(
+                            "Failed to finish deferred scene enhancement:",
+                            error,
+                        );
+                    } finally {
+                        if (!engine.isDestroyed) {
+                            options.clearLoadingProgress();
+                        }
+                    }
+                })();
             } catch (err) {
                 if (isDisposed) {
                     return;

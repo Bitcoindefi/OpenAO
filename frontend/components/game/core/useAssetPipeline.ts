@@ -1,4 +1,9 @@
 import { useCallback } from "react";
+import {
+    mapWithConcurrency,
+    selectPrefetchMapTargets,
+    shouldSkipNearbyMapPrefetch,
+} from "../../../lib/clientPerf";
 import { Assets, Rectangle, Texture } from "pixi.js";
 import type { CharacterSnapshot } from "../../../lib/aowProtocol";
 import type { GraphicData } from "../../../types/game";
@@ -482,9 +487,29 @@ export function useAssetPipeline({
                 return;
             }
 
-            const nearbyMaps = collectAdjacentMapNumbers(
-                engine.mapData,
-                engine.mapNumber,
+            const connection =
+                typeof navigator !== "undefined"
+                    ? (
+                          navigator as Navigator & {
+                              connection?: {
+                                  saveData?: boolean;
+                                  effectiveType?: string;
+                              };
+                          }
+                      ).connection
+                    : undefined;
+
+            if (shouldSkipNearbyMapPrefetch(connection)) {
+                updateLoadingProgress(
+                    "Precargando alrededores",
+                    100,
+                    "Prefetch omitido por ahorro de datos o conexion lenta.",
+                );
+                return;
+            }
+
+            const nearbyMaps = selectPrefetchMapTargets(
+                collectAdjacentMapNumbers(engine.mapData, engine.mapNumber),
             );
             if (!nearbyMaps.length) {
                 return;
@@ -496,12 +521,12 @@ export function useAssetPipeline({
                 `Analizando ${nearbyMaps.length} mapas cercanos...`,
             );
 
-            for (let index = 0; index < nearbyMaps.length; index++) {
+            let completed = 0;
+            await mapWithConcurrency(nearbyMaps, 2, async (targetMap) => {
                 if (engine.isDestroyed) {
                     return;
                 }
 
-                const targetMap = nearbyMaps[index];
                 try {
                     const nextMapData = await loadMapData(targetMap);
                     const nextMapDimensions = getMapDimensions(
@@ -521,9 +546,10 @@ export function useAssetPipeline({
                             },
                         ),
                     );
+                    completed += 1;
                     updateLoadingProgress(
                         "Precargando alrededores",
-                        88 + Math.round(((index + 1) / nearbyMaps.length) * 12),
+                        88 + Math.round((completed / nearbyMaps.length) * 12),
                         `Mapa ${targetMap} listo para transicion rapida.`,
                     );
                 } catch (error) {
@@ -532,7 +558,7 @@ export function useAssetPipeline({
                         error,
                     );
                 }
-            }
+            });
         },
         [preloadGraphicIds, updateLoadingProgress],
     );
