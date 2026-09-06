@@ -114,6 +114,7 @@ import {
     uploadGraphic,
 } from "./repositories/worldBuilder";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
+import { registerFloorPaintRoutes } from "./routes/floorPaintRoutes";
 import {
     getGameCraftingRecipeById,
     listGameCraftingRecipeChangesSince,
@@ -849,6 +850,10 @@ app.get("/game-data/graphics/:grhIndex.png", async (request, response) => {
             error instanceof Error ? error.message : "Unexpected error";
         response.status(400).json({ error: message });
     }
+});
+
+registerFloorPaintRoutes(app, {
+    requireAdmin: requireAdminEmailSession,
 });
 
 app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
