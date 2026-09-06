@@ -113,6 +113,15 @@ import {
     tileEntitySchema,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import {
+    NpcPlacementValidationError,
+    listMapNpcs,
+    moveMapNpc,
+    moveNpcSchema,
+    placeMapNpc,
+    placeNpcSchema,
+    removeMapNpc,
+} from "./repositories/worldBuilderNpcs";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -1133,6 +1142,119 @@ app.get(
         }
     },
 );
+
+
+/** #8: list NPCs placed on a map (draft overlays published). */
+app.get("/admin/game-data/maps/:mapNum/npcs", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json({ mapNum, npcs: await listMapNpcs(mapNum) });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** #8: place NPC draft with catalog / blocked / stack / limit checks. */
+app.post("/admin/game-data/maps/:mapNum/npcs", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const parsed = placeNpcSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+
+        response.json(
+            await placeMapNpc(mapNum, parsed.data, authorized.session.account._id),
+        );
+    } catch (error) {
+        if (error instanceof NpcPlacementValidationError) {
+            const status = error.code === "invalid_npc_index" ? 404 : 400;
+            response.status(status).json({ error: error.message, code: error.code });
+            return;
+        }
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** #8: atomic move of a draft NPC (self-tile is a no-op success). */
+app.post("/admin/game-data/maps/:mapNum/npcs/move", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const parsed = moveNpcSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+
+        response.json(
+            await moveMapNpc(mapNum, parsed.data, authorized.session.account._id),
+        );
+    } catch (error) {
+        if (error instanceof NpcPlacementValidationError) {
+            response.status(400).json({ error: error.message, code: error.code });
+            return;
+        }
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** #8: remove a draft NPC from a tile. */
+app.delete("/admin/game-data/maps/:mapNum/npcs/:x/:y", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const x = Number.parseInt(request.params.x ?? "", 10);
+        const y = Number.parseInt(request.params.y ?? "", 10);
+        if (
+            !Number.isInteger(mapNum) ||
+            mapNum <= 0 ||
+            !Number.isInteger(x) ||
+            !Number.isInteger(y)
+        ) {
+            response.status(400).json({ error: "Parametros invalidos." });
+            return;
+        }
+
+        response.json(await removeMapNpc(mapNum, x, y));
+    } catch (error) {
+        if (error instanceof NpcPlacementValidationError) {
+            response.status(400).json({ error: error.message, code: error.code });
+            return;
+        }
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
 
 /** Coloca un objeto o un NPC en un tile, como borrador. */
 app.put(
