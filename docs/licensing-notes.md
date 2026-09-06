@@ -30,3 +30,9 @@ Cualquier coincidencia en nombres de archivos o de componentes es generica
 
 No se agregaron dependencias nuevas; se usan las ya presentes
 (pixi.js, next, react) con sus licencias existentes.
+
+## WorldEditor map formats (#23)
+
+Classic `.map` / `.inf` / `.dat` interoperability is implemented as original
+TypeScript in `server/src/lib/worldEditorMapConverter.ts`. No VB6 WorldEditor
+source was copied. See `docs/worldeditor-map-import-export.md`.
