@@ -15,6 +15,7 @@ import { upsertGameCraftingRecipe } from "../repositories/gameCraftingRecipes";
 import { upsertGameNpc } from "../repositories/gameNpcs";
 import { upsertGameObject } from "../repositories/gameObjects";
 import { upsertGameSmeltingRecipe } from "../repositories/gameSmeltingRecipes";
+import { importGameMapsFromSource } from "../repositories/gameMaps";
 
 function getOptionValue(name: string): string | null {
   const index = process.argv.findIndex((argument) => argument === `--${name}`);
@@ -99,10 +100,11 @@ async function main(): Promise<void> {
   const npcsPath = resolveOptionalPath(getOptionValue("npcs-path"));
   const craftingPath = resolveOptionalPath(getOptionValue("crafting-path"));
   const smeltingPath = resolveOptionalPath(getOptionValue("smelting-path"));
+  const mapsPath = resolveOptionalPath(getOptionValue("maps-path"));
 
-  if (!["all", "objs", "npcs", "crafting", "smelting"].includes(mode)) {
+  if (!["all", "objs", "npcs", "crafting", "smelting", "maps"].includes(mode)) {
     throw new Error(
-      "Uso: pnpm import-game-data [all|objs|npcs|crafting|smelting] [--objects-path ruta] [--npcs-path ruta] [--crafting-path ruta] [--smelting-path ruta]",
+      "Uso: pnpm import-game-data [all|objs|npcs|crafting|smelting|maps] [--objects-path ruta] [--npcs-path ruta] [--crafting-path ruta] [--smelting-path ruta] [--maps-path ruta]",
     );
   }
 
@@ -131,6 +133,13 @@ async function main(): Promise<void> {
     const smelting = await importSmeltingRecipes(smeltingPath);
     console.log(
       `Fundicion importada. Total: ${smelting.total}. Nuevos/actualizados: ${smelting.changed}. Sin cambios: ${smelting.unchanged}.`,
+    );
+  }
+
+  if (mode === "all" || mode === "maps") {
+    const maps = await importGameMapsFromSource(mapsPath ?? undefined);
+    console.log(
+      `Mapas importados. Total: ${maps.total}. Nuevos/actualizados: ${maps.changed}. Sin cambios: ${maps.unchanged}.`,
     );
   }
 }

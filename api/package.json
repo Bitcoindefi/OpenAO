@@ -18,6 +18,7 @@
         "fix-missing-heads:prod": "node dist/scripts/fixCharactersMissingHeads.js",
         "import-game-data": "tsx src/scripts/importGameData.ts",
         "import-game-data:prod": "node dist/scripts/importGameData.js npcs",
+        "import-game-maps": "tsx src/scripts/importGameData.ts maps",
         "remove-newbie-items": "tsx src/scripts/removeNewbieItemsFromHighLevelCharacters.ts",
         "remove-newbie-items:prod": "node dist/scripts/removeNewbieItemsFromHighLevelCharacters.js",
         "reset-spell-stats": "tsx src/scripts/resetSpellStats.ts",
