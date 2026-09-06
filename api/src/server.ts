@@ -113,6 +113,14 @@ import {
     tileEntitySchema,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import {
+    checkMapEditPermission,
+    grantMapPermission,
+    listGrantedMapNums,
+    recordMapMutation,
+    revokeMapPermission,
+} from "./repositories/mapEditPermissions";
+import { parseProtectedOverride } from "./lib/mapEditPermissions";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -236,6 +244,62 @@ async function requireAdminEmailSession(
     }
 
     return authorized;
+}
+
+
+/**
+ * Sesion autorizada para MUTAR un mapa (#4).
+ * - Requiere proxy token (mismo mecanismo GAME_DATA_ADMIN_*).
+ * - Superadmin: email/account de game-data admin.
+ * - Colaborador: fila en game_map_permissions para ese mapa (o map_num=0).
+ * - Mapas protegidos: solo superadmin + header x-protected-map-override: true.
+ */
+async function requireMapEditSession(
+    request: express.Request,
+    response: express.Response,
+    mapNum: number,
+): Promise<{ accountId: string; isSuperAdmin: boolean } | null> {
+    if (!config.gameDataAdminProxyToken) {
+        response
+            .status(403)
+            .json({ error: "Admin de game-data deshabilitado." });
+        return null;
+    }
+
+    if (
+        getGameDataAdminProxyHeader(request) !== config.gameDataAdminProxyToken
+    ) {
+        response.status(403).json({ error: "No autorizado." });
+        return null;
+    }
+
+    const authorized = await getAuthorizedSession(request);
+
+    if (!authorized) {
+        response.status(401).json({ error: "Unauthorized" });
+        return null;
+    }
+
+    const isSuperAdmin = isAuthorizedGameDataAdmin(authorized.session);
+    const overrideProtected = parseProtectedOverride(
+        request.header("x-protected-map-override") ?? undefined,
+    );
+    const permission = await checkMapEditPermission({
+        accountId: authorized.session.account._id,
+        isSuperAdmin,
+        mapNum,
+        overrideProtected,
+    });
+
+    if (!permission.allowed) {
+        response.status(403).json({ error: permission.reason });
+        return null;
+    }
+
+    return {
+        accountId: authorized.session.account._id,
+        isSuperAdmin,
+    };
 }
 
 async function ensurePgStatStatements(): Promise<void> {
@@ -853,15 +917,15 @@ app.get("/game-data/graphics/:grhIndex.png", async (request, response) => {
 
 app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
-        if (!authorized) return;
-
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
         if (!Number.isInteger(mapNum) || mapNum <= 0) {
             response.status(400).json({ error: "Numero de mapa invalido." });
             return;
         }
+
+        const authorized = await requireMapEditSession(request, response, mapNum);
+        if (!authorized) return;
 
         const parsed = paintTilesSchema.safeParse(request.body);
 
@@ -872,13 +936,18 @@ app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
             return;
         }
 
-        response.json(
-            await paintTiles(
-                mapNum,
-                parsed.data.tiles,
-                authorized.session.account._id,
-            ),
+        const result = await paintTiles(
+            mapNum,
+            parsed.data.tiles,
+            authorized.accountId,
         );
+        await recordMapMutation({
+            accountId: authorized.accountId,
+            mapNum,
+            kind: "paint_tiles",
+            detail: { applied: result.applied },
+        });
+        response.json(result);
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -890,12 +959,6 @@ app.delete(
     "/admin/game-data/maps/:mapNum/tiles/:x/:y/:layer",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
-                request,
-                response,
-            );
-            if (!authorized) return;
-
             const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
             const x = Number.parseInt(request.params.x ?? "", 10);
             const y = Number.parseInt(request.params.y ?? "", 10);
@@ -906,7 +969,21 @@ app.delete(
                 return;
             }
 
-            response.json({ removed: await clearTile(mapNum, x, y, layer) });
+            const authorized = await requireMapEditSession(
+                request,
+                response,
+                mapNum,
+            );
+            if (!authorized) return;
+
+            const removed = await clearTile(mapNum, x, y, layer);
+            await recordMapMutation({
+                accountId: authorized.accountId,
+                mapNum,
+                kind: "clear_tile",
+                detail: { x, y, layer, removed },
+            });
+            response.json({ removed });
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
@@ -1016,9 +1093,6 @@ app.get("/admin/game-data/session", async (request, response) => {
 /** Publica los borradores de un mapa. A partir de aca los ven los jugadores. */
 app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
-        if (!authorized) return;
-
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
         if (!Number.isInteger(mapNum) || mapNum <= 0) {
@@ -1026,9 +1100,17 @@ app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
             return;
         }
 
-        response.json(
-            await publishMap(mapNum, authorized.session.account._id),
-        );
+        const authorized = await requireMapEditSession(request, response, mapNum);
+        if (!authorized) return;
+
+        const result = await publishMap(mapNum, authorized.accountId);
+        await recordMapMutation({
+            accountId: authorized.accountId,
+            mapNum,
+            kind: "publish",
+            detail: result,
+        });
+        response.json(result);
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1039,9 +1121,6 @@ app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
 /** Descarta los borradores sin tocar lo ya publicado. */
 app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
-        if (!authorized) return;
-
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
         if (!Number.isInteger(mapNum) || mapNum <= 0) {
@@ -1049,7 +1128,17 @@ app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
             return;
         }
 
-        response.json(await discardDrafts(mapNum));
+        const authorized = await requireMapEditSession(request, response, mapNum);
+        if (!authorized) return;
+
+        const result = await discardDrafts(mapNum);
+        await recordMapMutation({
+            accountId: authorized.accountId,
+            mapNum,
+            kind: "discard",
+            detail: result,
+        });
+        response.json(result);
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1063,9 +1152,6 @@ app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
  */
 app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
-        if (!authorized) return;
-
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
         if (!Number.isInteger(mapNum) || mapNum <= 0) {
@@ -1073,7 +1159,17 @@ app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
             return;
         }
 
-        response.json(await revertMap(mapNum));
+        const authorized = await requireMapEditSession(request, response, mapNum);
+        if (!authorized) return;
+
+        const result = await revertMap(mapNum);
+        await recordMapMutation({
+            accountId: authorized.accountId,
+            mapNum,
+            kind: "revert",
+            detail: result,
+        });
+        response.json(result);
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1139,18 +1235,19 @@ app.put(
     "/admin/game-data/maps/:mapNum/entities",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
-                request,
-                response,
-            );
-            if (!authorized) return;
-
             const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
 
             if (!Number.isInteger(mapNum) || mapNum <= 0) {
                 response.status(400).json({ error: "Numero de mapa invalido." });
                 return;
             }
+
+            const authorized = await requireMapEditSession(
+                request,
+                response,
+                mapNum,
+            );
+            if (!authorized) return;
 
             const parsed = tileEntitySchema.safeParse(request.body);
 
@@ -1161,13 +1258,18 @@ app.put(
                 return;
             }
 
-            response.json(
-                await placeTileEntity(
-                    mapNum,
-                    parsed.data,
-                    authorized.session.account._id,
-                ),
+            const result = await placeTileEntity(
+                mapNum,
+                parsed.data,
+                authorized.accountId,
             );
+            await recordMapMutation({
+                accountId: authorized.accountId,
+                mapNum,
+                kind: "place_entity",
+                detail: parsed.data,
+            });
+            response.json(result);
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
@@ -1181,12 +1283,6 @@ app.delete(
     "/admin/game-data/maps/:mapNum/entities/:x/:y/:kind",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
-                request,
-                response,
-            );
-            if (!authorized) return;
-
             const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
             const x = Number.parseInt(request.params.x ?? "", 10);
             const y = Number.parseInt(request.params.y ?? "", 10);
@@ -1202,9 +1298,120 @@ app.delete(
                 return;
             }
 
-            response.json({
-                removed: await removeTileEntity(mapNum, x, y, kind),
+            const authorized = await requireMapEditSession(
+                request,
+                response,
+                mapNum,
+            );
+            if (!authorized) return;
+
+            const removed = await removeTileEntity(mapNum, x, y, kind);
+            await recordMapMutation({
+                accountId: authorized.accountId,
+                mapNum,
+                kind: "remove_entity",
+                detail: { x, y, entityKind: kind, removed },
             });
+            response.json({
+                removed,
+            });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+
+/** Lista permisos de mapa de una cuenta (superadmin). */
+app.get(
+    "/admin/game-data/accounts/:accountId/map-permissions",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+
+            const accountId = request.params.accountId ?? "";
+            if (!accountId) {
+                response.status(400).json({ error: "accountId invalido." });
+                return;
+            }
+
+            response.json({
+                accountId,
+                mapNums: await listGrantedMapNums(accountId),
+            });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Concede permiso de edicion sobre un mapa (o map_num=0 global no protegido). */
+app.put(
+    "/admin/game-data/maps/:mapNum/permissions/:accountId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const accountId = request.params.accountId ?? "";
+
+            if (!Number.isInteger(mapNum) || mapNum < 0 || !accountId) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+
+            await grantMapPermission(
+                accountId,
+                mapNum,
+                authorized.session.account._id,
+            );
+            await recordMapMutation({
+                accountId: authorized.session.account._id,
+                mapNum: mapNum === 0 ? 1 : mapNum,
+                kind: "grant_permission",
+                detail: { targetAccountId: accountId, mapNum },
+            });
+            response.json({ accountId, mapNum, granted: true });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Revoca permiso de edicion de mapa. */
+app.delete(
+    "/admin/game-data/maps/:mapNum/permissions/:accountId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(request, response);
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const accountId = request.params.accountId ?? "";
+
+            if (!Number.isInteger(mapNum) || mapNum < 0 || !accountId) {
+                response.status(400).json({ error: "Parametros invalidos." });
+                return;
+            }
+
+            const revoked = await revokeMapPermission(accountId, mapNum);
+            if (revoked) {
+                await recordMapMutation({
+                    accountId: authorized.session.account._id,
+                    mapNum: mapNum === 0 ? 1 : mapNum,
+                    kind: "revoke_permission",
+                    detail: { targetAccountId: accountId, mapNum },
+                });
+            }
+            response.json({ accountId, mapNum, revoked });
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
