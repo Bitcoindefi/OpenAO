@@ -17,6 +17,11 @@ import {
     createPositionPacket,
 } from "../../../lib/aowProtocol";
 import { TILE_SIZE } from "../../../lib/viewport";
+import {
+    TOUCH_LONG_PRESS_MS,
+    TOUCH_LONG_PRESS_MOVE_TOLERANCE_PX,
+    shouldTreatPointerAsTouch,
+} from "../../../lib/mobile/playability";
 import { createDebugGrid } from "../rendering/debugGrid";
 import {
     createEntityFXRowContainers,
@@ -448,6 +453,102 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     });
                 };
 
+                const handleSecondaryWorldClick = (
+                    interaction: {
+                        socket: WebSocket;
+                        targetTileX: number;
+                        targetTileY: number;
+                    },
+                    event: FederatedPointerEvent,
+                ) => {
+                    const clickedNpc = findInspectableNpcAtTile(
+                        engine,
+                        interaction.targetTileX,
+                        interaction.targetTileY,
+                    );
+                    const clickedDeadCharacter = findRevivableCharacterAtTile(
+                        engine,
+                        interaction.targetTileX,
+                        interaction.targetTileY,
+                    );
+                    const allowAdminNpcInspect = isAdminInspector(
+                        engine,
+                        options.playerHudRef.current,
+                    );
+
+                    if (allowAdminNpcInspect && clickedDeadCharacter) {
+                        const containerRect =
+                            options.rendererRootRef.current?.getBoundingClientRect();
+                        const rawX =
+                            event.clientX - (containerRect?.left ?? 0);
+                        const rawY =
+                            event.clientY - (containerRect?.top ?? 0);
+                        options.setDeadCharacterContextMenu({
+                            x: Math.max(12, rawX),
+                            y: Math.max(12, rawY),
+                            character: {
+                                entityId: clickedDeadCharacter.id,
+                                name:
+                                    clickedDeadCharacter.nameCharacter?.trim() ||
+                                    `Entity-${clickedDeadCharacter.id}`,
+                            },
+                        });
+                        options.setNpcContextMenu(null);
+                        options.npcContextMenuOpenedAtRef.current =
+                            event.timeStamp;
+                        return;
+                    }
+
+                    if (
+                        clickedNpc &&
+                        canInspectNpc(
+                            engine,
+                            clickedNpc,
+                            allowAdminNpcInspect,
+                        )
+                    ) {
+                        const containerRect =
+                            options.rendererRootRef.current?.getBoundingClientRect();
+                        const rawX =
+                            event.clientX - (containerRect?.left ?? 0);
+                        const rawY =
+                            event.clientY - (containerRect?.top ?? 0);
+                        options.setNpcContextMenu({
+                            x: Math.max(12, rawX),
+                            y: Math.max(12, rawY),
+                            npc: buildInspectableNpc(engine, clickedNpc),
+                        });
+                        options.setDeadCharacterContextMenu(null);
+                        options.npcContextMenuOpenedAtRef.current =
+                            event.timeStamp;
+                        return;
+                    }
+
+                    sendInteractionClickPacket(
+                        interaction.socket,
+                        interaction.targetTileX,
+                        interaction.targetTileY,
+                        2,
+                    );
+                };
+
+                let touchLongPressTimer: number | null = null;
+                let touchLongPressFired = false;
+                let touchPointerId: number | null = null;
+                let touchStartClient = { x: 0, y: 0 };
+                let touchStartInteraction: {
+                    socket: WebSocket;
+                    targetTileX: number;
+                    targetTileY: number;
+                } | null = null;
+
+                const clearTouchLongPress = () => {
+                    if (touchLongPressTimer !== null) {
+                        window.clearTimeout(touchLongPressTimer);
+                        touchLongPressTimer = null;
+                    }
+                };
+
                 mapContainer.on("pointerdown", (event) => {
                     const interaction = getInteractionContext(event);
                     if (!interaction) {
@@ -465,80 +566,38 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     const isRightClick = event.button === 2;
 
                     if (isRightClick) {
-                        const clickedNpc = findInspectableNpcAtTile(
-                            engine,
-                            interaction.targetTileX,
-                            interaction.targetTileY,
-                        );
-                        const clickedDeadCharacter =
-                            findRevivableCharacterAtTile(
-                                engine,
-                                interaction.targetTileX,
-                                interaction.targetTileY,
-                            );
-                        const allowAdminNpcInspect = isAdminInspector(
-                            engine,
-                            options.playerHudRef.current,
-                        );
-
-                        if (allowAdminNpcInspect && clickedDeadCharacter) {
-                            const containerRect =
-                                options.rendererRootRef.current?.getBoundingClientRect();
-                            const rawX =
-                                event.clientX - (containerRect?.left ?? 0);
-                            const rawY =
-                                event.clientY - (containerRect?.top ?? 0);
-                            options.setDeadCharacterContextMenu({
-                                x: Math.max(12, rawX),
-                                y: Math.max(12, rawY),
-                                character: {
-                                    entityId: clickedDeadCharacter.id,
-                                    name:
-                                        clickedDeadCharacter.nameCharacter?.trim() ||
-                                        `Entity-${clickedDeadCharacter.id}`,
-                                },
-                            });
-                            options.setNpcContextMenu(null);
-                            options.npcContextMenuOpenedAtRef.current =
-                                event.timeStamp;
-                            return;
-                        }
-
-                        if (
-                            clickedNpc &&
-                            canInspectNpc(
-                                engine,
-                                clickedNpc,
-                                allowAdminNpcInspect,
-                            )
-                        ) {
-                            const containerRect =
-                                options.rendererRootRef.current?.getBoundingClientRect();
-                            const rawX =
-                                event.clientX - (containerRect?.left ?? 0);
-                            const rawY =
-                                event.clientY - (containerRect?.top ?? 0);
-                            options.setNpcContextMenu({
-                                x: Math.max(12, rawX),
-                                y: Math.max(12, rawY),
-                                npc: buildInspectableNpc(engine, clickedNpc),
-                            });
-                            options.setDeadCharacterContextMenu(null);
-                            options.npcContextMenuOpenedAtRef.current =
-                                event.timeStamp;
-                            return;
-                        }
-
-                        sendInteractionClickPacket(
-                            interaction.socket,
-                            interaction.targetTileX,
-                            interaction.targetTileY,
-                            2,
-                        );
+                        handleSecondaryWorldClick(interaction, event);
                         return;
                     }
 
                     if (options.targetingModeRef.current) {
+                        return;
+                    }
+
+                    const isTouchLike = shouldTreatPointerAsTouch(
+                        (event as FederatedPointerEvent & { pointerType?: string })
+                            .pointerType,
+                    );
+
+                    if (isTouchLike) {
+                        clearTouchLongPress();
+                        touchLongPressFired = false;
+                        touchPointerId = event.pointerId;
+                        touchStartClient = {
+                            x: event.clientX,
+                            y: event.clientY,
+                        };
+                        touchStartInteraction = interaction;
+                        touchLongPressTimer = window.setTimeout(() => {
+                            touchLongPressTimer = null;
+                            touchLongPressFired = true;
+                            if (touchStartInteraction) {
+                                handleSecondaryWorldClick(
+                                    touchStartInteraction,
+                                    event,
+                                );
+                            }
+                        }, TOUCH_LONG_PRESS_MS);
                         return;
                     }
 
@@ -549,7 +608,61 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     );
                 });
 
+                mapContainer.on("globalpointermove", (event) => {
+                    if (
+                        touchPointerId === null ||
+                        event.pointerId !== touchPointerId ||
+                        touchLongPressFired
+                    ) {
+                        return;
+                    }
+
+                    const dx = event.clientX - touchStartClient.x;
+                    const dy = event.clientY - touchStartClient.y;
+                    if (
+                        Math.hypot(dx, dy) < TOUCH_LONG_PRESS_MOVE_TOLERANCE_PX
+                    ) {
+                        return;
+                    }
+
+                    clearTouchLongPress();
+                    touchPointerId = null;
+                    const start = touchStartInteraction;
+                    touchStartInteraction = null;
+                    if (start && !options.targetingModeRef.current) {
+                        sendInteractionClickPacket(
+                            start.socket,
+                            start.targetTileX,
+                            start.targetTileY,
+                        );
+                    }
+                });
+
                 mapContainer.on("pointerup", (event) => {
+                    if (
+                        touchPointerId !== null &&
+                        event.pointerId === touchPointerId
+                    ) {
+                        const wasLongPress = touchLongPressFired;
+                        clearTouchLongPress();
+                        touchPointerId = null;
+                        const start = touchStartInteraction;
+                        touchStartInteraction = null;
+
+                        if (
+                            !wasLongPress &&
+                            start &&
+                            !options.targetingModeRef.current &&
+                            event.button !== 2
+                        ) {
+                            sendInteractionClickPacket(
+                                start.socket,
+                                start.targetTileX,
+                                start.targetTileY,
+                            );
+                        }
+                    }
+
                     const targetingMode = options.targetingModeRef.current;
                     if (!targetingMode || event.button === 2) {
                         return;

@@ -16,7 +16,9 @@ import {
 } from "../../../utils/gameLoader";
 import { getApiBaseUrl } from "../../../lib/api-base-url";
 import {
+    createChangeSeguroPacket,
     createDialogPacket,
+    createPickupItemPacket,
     type ChatChannel,
     type CharacterStatsSnapshot,
     type PanelSnapshot,
@@ -69,6 +71,8 @@ import { useAssetPipeline } from "./useAssetPipeline";
 import { useMovementSync, type LocalPendingMove } from "./useMovementSync";
 import { useCombatController, type TargetingMode } from "./useCombatController";
 import { useKeyboardGameplay } from "./useKeyboardGameplay";
+import { useTouchStickMovement } from "./useTouchStickMovement";
+import MobilePlayControls from "../mobile/MobilePlayControls";
 import { useNpcAdminTools } from "./useNpcAdminTools";
 import { useHudStateController } from "./useHudStateController";
 import { useSceneController } from "./useSceneController";
@@ -209,7 +213,13 @@ interface MapRendererProps {
     onAdminOverviewSnapshot?: (snapshot: PanelSnapshot) => void;
     onCharacterStatsSnapshot?: (snapshot: CharacterStatsSnapshot) => void;
     onPerformanceSample?: (sample: PerformanceSample) => void;
+    mobileControlsEnabled?: boolean;
+    onMobileOpenChat?: () => void;
+    onMobileTogglePanel?: () => void;
+    onMobileCastSpell?: () => void;
+    onMobileUseItem?: () => void;
 }
+
 
 interface ManualConnectionConfig {
     wsUrl: string;
@@ -704,6 +714,11 @@ export default function MapRenderer({
     onAdminOverviewSnapshot,
     onCharacterStatsSnapshot,
     onPerformanceSample,
+    mobileControlsEnabled = false,
+    onMobileOpenChat,
+    onMobileTogglePanel,
+    onMobileCastSpell,
+    onMobileUseItem,
 }: MapRendererProps) {
     const canvasRef = useRef<HTMLDivElement>(null);
     const rendererRootRef = useRef<HTMLDivElement>(null);
@@ -1332,6 +1347,47 @@ export default function MapRenderer({
         syncMovementState,
         setIsDebugMode,
     });
+
+    const { applyStickVector, releaseStick } = useTouchStickMovement({
+        isMounted,
+        enabled: mobileControlsEnabled,
+        engineRef,
+        movementKeyMapRef,
+        movementPressCountsRef,
+        movementKeyPriorityRef,
+        canProcessMovementInput,
+        clearMovementInputState,
+        syncMovementState,
+    });
+
+    const handleMobileAttack = React.useCallback(() => {
+        const activeEngine = engineRef.current;
+        if (hasEquippedMeleeWeapon()) {
+            activeEngine?.sendMeleeAttackPacket?.();
+            return;
+        }
+        if (hasEquippedRangedWeapon()) {
+            setTargetingMode({ type: "range" });
+        }
+    }, [hasEquippedMeleeWeapon, hasEquippedRangedWeapon, setTargetingMode]);
+
+    const handleMobilePickup = React.useCallback(() => {
+        const socket = websocketRef.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        socket.send(createPickupItemPacket());
+        recordClientGameAction("pickup_item", { source: "mobile" });
+    }, [recordClientGameAction]);
+
+    const handleMobileToggleSeguro = React.useCallback(() => {
+        const socket = websocketRef.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        socket.send(createChangeSeguroPacket());
+        recordClientGameAction("toggle_seguro", { source: "mobile" });
+    }, [recordClientGameAction]);
 
     const { clearUseItemQueues } = useOutgoingRequests({
         websocketRef,
@@ -2071,6 +2127,18 @@ export default function MapRenderer({
                             name,
                         )
                     }
+                />
+                <MobilePlayControls
+                    enabled={mobileControlsEnabled}
+                    onStickVector={applyStickVector}
+                    onStickRelease={releaseStick}
+                    onAttack={handleMobileAttack}
+                    onCastSpell={() => onMobileCastSpell?.()}
+                    onUseItem={() => onMobileUseItem?.()}
+                    onPickup={handleMobilePickup}
+                    onToggleSeguro={handleMobileToggleSeguro}
+                    onOpenChat={() => onMobileOpenChat?.()}
+                    onTogglePanel={() => onMobileTogglePanel?.()}
                 />
             </div>
         </div>
