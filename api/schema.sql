@@ -652,3 +652,30 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+-- OpenAO #24: isolated user map space (range 600-999), ownership, quotas, statuses.
+-- Differentiates from 1000-1999 service stubs by using the free gap after local
+-- static maps (500-599) and before challenge instances (2000+), with real tables.
+
+CREATE TABLE IF NOT EXISTS user_maps (
+    map_num INTEGER PRIMARY KEY
+        CHECK (map_num BETWEEN 600 AND 999),
+    owner_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'proposed', 'published', 'archived')),
+    npc_count INTEGER NOT NULL DEFAULT 0 CHECK (npc_count >= 0),
+    object_count INTEGER NOT NULL DEFAULT 0 CHECK (object_count >= 0),
+    asset_bytes BIGINT NOT NULL DEFAULT 0 CHECK (asset_bytes >= 0),
+    allow_combat BOOLEAN NOT NULL DEFAULT FALSE,
+    allow_exp BOOLEAN NOT NULL DEFAULT FALSE,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_maps_owner
+    ON user_maps(owner_account_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_maps_status
+    ON user_maps(status);
+
