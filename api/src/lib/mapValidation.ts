@@ -1,12 +1,30 @@
 /**
- * Automated map validation checks for user-submitted maps (Issue #25)
+ * Automated map validation checks for user-submitted maps (Issues #24 and #25)
  *
- * Implements pre-filtering before human moderation:
- * 1. Banned words / offensive language detection in map name and texts
- * 2. Entity limits & quotas validation (NPCs, objects, dimensions)
- * 3. Topological connectivity & reachability check (BFS from spawn point,
- *    detection of trapped walkable pockets and unreachable entities)
+ * Implements:
+ * 1. Reserved ID range & structural isolation: User maps live in 100,000 - 999,999,
+ *    never colliding with or modifying official world maps (1-500), static local maps (500-599),
+ *    challenges (2,000-29,999), or dynamic instances (30,000-99,999).
+ * 2. World Isolation: Portals/exits in user maps cannot target official world maps.
+ * 3. Economy Isolation: User maps cannot place gold piles, currency (item 12), high-value
+ *    loot items, or XP/gold-farming NPCs.
+ * 4. Banned words / offensive language detection in map name and texts.
+ * 5. Entity limits & quotas validation (NPCs, objects, dimensions, storage bytes).
+ * 6. Topological connectivity & reachability check (BFS from spawn point).
  */
+
+export const USER_MAP_START = 100_000;
+export const USER_MAP_END = 999_999;
+export const OFFICIAL_MAP_START = 1;
+export const OFFICIAL_MAP_END = 500;
+
+export function isUserMapNumber(num: number): boolean {
+    return Number.isInteger(num) && num >= USER_MAP_START && num <= USER_MAP_END;
+}
+
+export function isOfficialMapNumber(num: number): boolean {
+    return Number.isInteger(num) && num >= OFFICIAL_MAP_START && num <= OFFICIAL_MAP_END;
+}
 
 export type MapEntityPlacement = {
     x: number;
@@ -15,7 +33,16 @@ export type MapEntityPlacement = {
     entityId?: number;
     name?: string;
     type?: string;
+    gold?: number;
+    exp?: number;
+    drop?: Array<{ item: number; cant: number }>;
     [key: string]: unknown;
+};
+
+export type MapTileExit = {
+    map: number;
+    x: number;
+    y: number;
 };
 
 export type UserMapData = {
@@ -26,6 +53,8 @@ export type UserMapData = {
         spawnX?: number;
         spawnY?: number;
         description?: string;
+        allowCombat?: boolean;
+        allowExp?: boolean;
         [key: string]: unknown;
     };
     terrain?: Array<{
@@ -34,17 +63,20 @@ export type UserMapData = {
         blocked?: boolean;
         layer?: number;
         grhIndex?: number | null;
+        tileExit?: MapTileExit;
         [key: string]: unknown;
     }>;
     npcs?: MapEntityPlacement[];
     specials?: MapEntityPlacement[];
     signs?: Array<{ x: number; y: number; text: string }>;
+    exits?: MapTileExit[];
     [key: string]: unknown;
 };
 
 export type UserMapQuotaLimits = {
     maxNpcsPerMap: number;
     maxObjsPerMap: number;
+    maxStorageBytes?: number;
     maxWidth?: number;
     maxHeight?: number;
 };
@@ -55,6 +87,16 @@ const BANNED_PATTERNS: RegExp[] = [
     /\b(puto|puta|maricon|mierda|concha|culiao|pendejo|chupala|pelotudo|hijodeputa)\b/i,
     /\b(fuck|shit|bitch|cunt|nigger|nigga|faggot|whore|slut)\b/i,
 ];
+
+// Argentum Online Economy Item IDs that are strictly prohibited in user maps
+// Item 12 = Monedas de Oro (Gold coins)
+// Items 54, 65, 69, 73, 339, 432, etc. = Official house keys
+// Items 474 = Barca (Boats/Ships)
+const PROHIBITED_ITEM_IDS = new Set<number>([
+    12, // Oro / Gold currency
+    54, 65, 69, 73, 339, 432, 436, 440, // Llaves oficiales de casas
+    474, // Barca
+]);
 
 export function checkBannedWords(text: string): { ok: boolean; matched: string[] } {
     if (!text || typeof text !== 'string') return { ok: true, matched: [] };
@@ -71,13 +113,11 @@ export function checkBannedWords(text: string): { ok: boolean; matched: string[]
 export function validateTextContent(mapName: string, mapData: UserMapData): { ok: boolean; errors: string[] } {
     const errors: string[] = [];
 
-    // 1. Check map name
     const nameCheck = checkBannedWords(mapName);
     if (!nameCheck.ok) {
         errors.push(`El nombre del mapa contiene términos prohibidos: ${nameCheck.matched.join(', ')}`);
     }
 
-    // 2. Check meta description
     if (mapData.meta?.description) {
         const descCheck = checkBannedWords(mapData.meta.description);
         if (!descCheck.ok) {
@@ -85,7 +125,6 @@ export function validateTextContent(mapName: string, mapData: UserMapData): { ok
         }
     }
 
-    // 3. Check NPC names
     if (Array.isArray(mapData.npcs)) {
         for (const npc of mapData.npcs) {
             if (npc.name) {
@@ -97,7 +136,6 @@ export function validateTextContent(mapName: string, mapData: UserMapData): { ok
         }
     }
 
-    // 4. Check sign texts
     if (Array.isArray(mapData.signs)) {
         for (const sign of mapData.signs) {
             if (sign.text) {
@@ -105,6 +143,78 @@ export function validateTextContent(mapName: string, mapData: UserMapData): { ok
                 if (!signCheck.ok) {
                     errors.push(`El cartel en (${sign.x}, ${sign.y}) contiene texto prohibido.`);
                 }
+            }
+        }
+    }
+
+    return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Validates economy isolation (Issue #24).
+ * User maps cannot be an infinite gold or high-tier loot generation exploit.
+ */
+export function validateEconomyIsolation(mapData: UserMapData): { ok: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    // 1. Check special objects placed
+    if (Array.isArray(mapData.specials)) {
+        for (const obj of mapData.specials) {
+            const entityId = obj.entityId ?? obj.id;
+            if (entityId != null && PROHIBITED_ITEM_IDS.has(entityId)) {
+                errors.push(`El objeto con ID ${entityId} en (${obj.x}, ${obj.y}) está prohibido en mapas de usuario (aislamiento de economía).`);
+            }
+            if (obj.gold && obj.gold > 0) {
+                errors.push(`No se permite colocar pilas de oro directas en mapas de usuario (encontrado en (${obj.x}, ${obj.y})).`);
+            }
+        }
+    }
+
+    // 2. Check NPCs placed (cannot grant unauthorized gold or high-value drops)
+    if (Array.isArray(mapData.npcs)) {
+        for (const npc of mapData.npcs) {
+            if (npc.gold && npc.gold > 0) {
+                errors.push(`El NPC en (${npc.x}, ${npc.y}) no puede otorgar oro directo.`);
+            }
+            if (Array.isArray(npc.drop)) {
+                for (const d of npc.drop) {
+                    if (d.item === 12 || PROHIBITED_ITEM_IDS.has(d.item)) {
+                        errors.push(`El NPC en (${npc.x}, ${npc.y}) contiene drops de economía oficial prohibidos (ítem ${d.item}).`);
+                    }
+                }
+            }
+        }
+    }
+
+    return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Validates world isolation (Issue #24).
+ * User map portals/exits cannot target official world maps (1-500).
+ */
+export function validateWorldIsolation(mapData: UserMapData): { ok: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    const checkExit = (exit: MapTileExit, location: string) => {
+        if (exit && exit.map != null) {
+            // Cannot link into official world maps (1-500)
+            if (isOfficialMapNumber(exit.map) || (exit.map >= 1 && exit.map < USER_MAP_START)) {
+                errors.push(`La salida en ${location} apunta al mapa oficial ${exit.map}. Los mapas de usuario no pueden abrir portales al mundo oficial (aislamiento de mundo).`);
+            }
+        }
+    };
+
+    if (Array.isArray(mapData.exits)) {
+        for (let i = 0; i < mapData.exits.length; i++) {
+            checkExit(mapData.exits[i], `salida general #${i + 1}`);
+        }
+    }
+
+    if (Array.isArray(mapData.terrain)) {
+        for (const t of mapData.terrain) {
+            if (t.tileExit) {
+                checkExit(t.tileExit, `(${t.x}, ${t.y})`);
             }
         }
     }
@@ -137,6 +247,13 @@ export function validateQuotasAndLimits(
         errors.push(`Dimensiones de mapa inválidas (${width}x${height}). Permitido: 10x10 a ${maxWidth}x${maxHeight}.`);
     }
 
+    if (quotas.maxStorageBytes) {
+        const byteSize = Buffer.byteLength(JSON.stringify(mapData), 'utf8');
+        if (byteSize > quotas.maxStorageBytes) {
+            errors.push(`El tamaño del mapa (${byteSize} bytes) supera la cuota máxima de almacenamiento (${quotas.maxStorageBytes} bytes).`);
+        }
+    }
+
     return { ok: errors.length === 0, errors };
 }
 
@@ -159,7 +276,6 @@ export function validateReachability(mapData: UserMapData): {
         return { ok: false, errors, warnings, reachableTilesCount: 0 };
     }
 
-    // Map blocked tiles lookup: key = `${x},${y}`
     const blockedTiles = new Set<string>();
     if (Array.isArray(mapData.terrain)) {
         for (const t of mapData.terrain) {
@@ -175,7 +291,6 @@ export function validateReachability(mapData: UserMapData): {
         return { ok: false, errors, warnings, reachableTilesCount: 0 };
     }
 
-    // BFS exploration from spawn point
     const visited = new Set<string>();
     const queue: Array<[number, number]> = [[spawnX, spawnY]];
     visited.add(spawnKey);
@@ -202,12 +317,10 @@ export function validateReachability(mapData: UserMapData): {
         }
     }
 
-    // Must have at least a minimal walkable area
     if (visited.size < 5) {
         errors.push(`El mapa no tiene un área transitable suficiente desde el punto de entrada (solo ${visited.size} tiles alcanzables).`);
     }
 
-    // Check if NPCs or specials are placed on blocked or unreachable tiles
     if (Array.isArray(mapData.npcs)) {
         for (const npc of mapData.npcs) {
             const key = `${npc.x},${npc.y}`;
@@ -244,6 +357,8 @@ export type AutomatedCheckResult = {
         textFilter: boolean;
         quotas: boolean;
         reachability: boolean;
+        economyIsolation: boolean;
+        worldIsolation: boolean;
     };
 };
 
@@ -255,8 +370,16 @@ export function runAutomatedMapChecks(
     const textRes = validateTextContent(mapName, mapData);
     const quotaRes = validateQuotasAndLimits(mapData, quotas);
     const reachRes = validateReachability(mapData);
+    const economyRes = validateEconomyIsolation(mapData);
+    const worldRes = validateWorldIsolation(mapData);
 
-    const allErrors = [...textRes.errors, ...quotaRes.errors, ...reachRes.errors];
+    const allErrors = [
+        ...textRes.errors,
+        ...quotaRes.errors,
+        ...reachRes.errors,
+        ...economyRes.errors,
+        ...worldRes.errors,
+    ];
     const allWarnings = [...reachRes.warnings];
 
     return {
@@ -267,6 +390,8 @@ export function runAutomatedMapChecks(
             textFilter: textRes.ok,
             quotas: quotaRes.ok,
             reachability: reachRes.ok,
+            economyIsolation: economyRes.ok,
+            worldIsolation: worldRes.ok,
         },
     };
 }

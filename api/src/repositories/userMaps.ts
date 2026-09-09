@@ -4,6 +4,12 @@ import {
     UserMapData,
     UserMapQuotaLimits,
     AutomatedCheckResult,
+    USER_MAP_START,
+    USER_MAP_END,
+    isUserMapNumber,
+    isOfficialMapNumber,
+    validateEconomyIsolation,
+    validateWorldIsolation,
 } from '../lib/mapValidation';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -20,11 +26,14 @@ export type UserMapRecord = {
     id: string;
     owner_account_id: string;
     name: string;
+    map_num: number;
     map_data: UserMapData;
     state: UserMapState;
     rejection_reason: string | null;
     npc_count: number;
     obj_count: number;
+    allow_combat: boolean;
+    allow_exp: boolean;
     proposed_at: Date | null;
     published_at: Date | null;
     created_at: Date;
@@ -35,10 +44,13 @@ export type UserMapResponse = {
     id: string;
     ownerId: string;
     name: string;
+    mapNum: number;
     state: UserMapState;
     rejectionReason: string | null;
     npcCount: number;
     objCount: number;
+    allowCombat: boolean;
+    allowExp: boolean;
     proposedAt: Date | null;
     publishedAt: Date | null;
     createdAt: Date;
@@ -52,6 +64,7 @@ export type UserMapQuota = {
     maxMaps: number;
     maxNpcsPerMap: number;
     maxObjsPerMap: number;
+    maxStorageBytes: number;
 };
 
 export type UserMapReport = {
@@ -76,6 +89,7 @@ export const DEFAULT_QUOTA: UserMapQuota = {
     maxMaps: 5,
     maxNpcsPerMap: 20,
     maxObjsPerMap: 50,
+    maxStorageBytes: 5 * 1024 * 1024, // 5 MB
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -88,10 +102,13 @@ function toResponse(
         id: row.id,
         ownerId: row.owner_account_id,
         name: row.name,
+        mapNum: row.map_num,
         state: row.state,
         rejectionReason: row.rejection_reason,
         npcCount: row.npc_count,
         objCount: row.obj_count,
+        allowCombat: row.allow_combat ?? false,
+        allowExp: row.allow_exp ?? false,
         proposedAt: row.proposed_at,
         publishedAt: row.published_at,
         createdAt: row.created_at,
@@ -109,6 +126,22 @@ function countEntities(mapData: UserMapData): { npcCount: number; objCount: numb
     return { npcCount: npcs, objCount: objs };
 }
 
+// ── Range & Map Number Allocation ────────────────────────────────────────────
+
+export async function allocateUserMapNumber(): Promise<number> {
+    const res = await pool.query<{ next_num: string | number }>(
+        `SELECT COALESCE(MAX(map_num), $1 - 1) + 1 AS next_num
+         FROM user_maps
+         WHERE map_num >= $1 AND map_num <= $2`,
+        [USER_MAP_START, USER_MAP_END],
+    );
+    const next = Number(res.rows[0]?.next_num ?? USER_MAP_START);
+    if (next > USER_MAP_END) {
+        throw new Error('Se ha agotado el rango de IDs de mapas de usuario disponibles.');
+    }
+    return next;
+}
+
 // ── Quota Management ─────────────────────────────────────────────────────────
 
 export async function getQuota(accountId: string): Promise<UserMapQuota> {
@@ -116,8 +149,9 @@ export async function getQuota(accountId: string): Promise<UserMapQuota> {
         max_maps: number;
         max_npcs_per_map: number;
         max_objs_per_map: number;
+        max_storage_bytes?: number;
     }>(
-        `SELECT max_maps, max_npcs_per_map, max_objs_per_map
+        `SELECT max_maps, max_npcs_per_map, max_objs_per_map, max_storage_bytes
          FROM user_map_quotas
          WHERE account_id = $1`,
         [accountId],
@@ -128,6 +162,7 @@ export async function getQuota(accountId: string): Promise<UserMapQuota> {
         maxMaps: row.max_maps,
         maxNpcsPerMap: row.max_npcs_per_map,
         maxObjsPerMap: row.max_objs_per_map,
+        maxStorageBytes: row.max_storage_bytes ?? DEFAULT_QUOTA.maxStorageBytes,
     };
 }
 
@@ -140,17 +175,19 @@ export async function setQuota(
         maxMaps: quota.maxMaps ?? current.maxMaps,
         maxNpcsPerMap: quota.maxNpcsPerMap ?? current.maxNpcsPerMap,
         maxObjsPerMap: quota.maxObjsPerMap ?? current.maxObjsPerMap,
+        maxStorageBytes: quota.maxStorageBytes ?? current.maxStorageBytes,
     };
 
     await pool.query(
-        `INSERT INTO user_map_quotas (account_id, max_maps, max_npcs_per_map, max_objs_per_map, updated_at)
-         VALUES ($1, $2, $3, $4, NOW())
+        `INSERT INTO user_map_quotas (account_id, max_maps, max_npcs_per_map, max_objs_per_map, max_storage_bytes, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
          ON CONFLICT (account_id) DO UPDATE
          SET max_maps = EXCLUDED.max_maps,
              max_npcs_per_map = EXCLUDED.max_npcs_per_map,
              max_objs_per_map = EXCLUDED.max_objs_per_map,
+             max_storage_bytes = EXCLUDED.max_storage_bytes,
              updated_at = NOW()`,
-        [accountId, updated.maxMaps, updated.maxNpcsPerMap, updated.maxObjsPerMap],
+        [accountId, updated.maxMaps, updated.maxNpcsPerMap, updated.maxObjsPerMap, updated.maxStorageBytes],
     );
 
     return updated;
@@ -170,12 +207,14 @@ export async function createMap(
     ownerAccountId: string,
     name: string,
     mapData: UserMapData,
+    requestedMapNum?: number,
 ): Promise<UserMapResponse | { error: string }> {
     const trimmedName = name.trim();
     if (trimmedName.length < 3) {
         return { error: 'El nombre del mapa debe tener al menos 3 caracteres.' };
     }
 
+    // 1. Quota checks
     const quota = await getQuota(ownerAccountId);
     const owned = await countOwnedMaps(ownerAccountId);
     if (owned >= quota.maxMaps) {
@@ -190,11 +229,45 @@ export async function createMap(
         return { error: `Cantidad de objetos (${objCount}) supera la cuota permitida (${quota.maxObjsPerMap}).` };
     }
 
+    const byteSize = Buffer.byteLength(JSON.stringify(mapData), 'utf8');
+    if (byteSize > quota.maxStorageBytes) {
+        return { error: `El peso del mapa (${byteSize} bytes) supera la cuota de almacenamiento permitida (${quota.maxStorageBytes} bytes).` };
+    }
+
+    // 2. Economy & World isolation checks
+    const economyCheck = validateEconomyIsolation(mapData);
+    if (!economyCheck.ok) {
+        return { error: `Aislamiento de economía: ${economyCheck.errors.join(' | ')}` };
+    }
+
+    const worldCheck = validateWorldIsolation(mapData);
+    if (!worldCheck.ok) {
+        return { error: `Aislamiento de mundo: ${worldCheck.errors.join(' | ')}` };
+    }
+
+    // 3. Allocate map_num in reserved range (100,000 - 999,999)
+    let mapNum: number;
+    if (requestedMapNum !== undefined) {
+        if (!isUserMapNumber(requestedMapNum)) {
+            return {
+                error: `Número de mapa ${requestedMapNum} inválido. Los mapas de usuario deben estar en el rango reservado [${USER_MAP_START} - ${USER_MAP_END}]. No se permite solapar mapas del mundo oficial.`,
+            };
+        }
+        // Verify not taken
+        const exists = await pool.query(`SELECT 1 FROM user_maps WHERE map_num = $1`, [requestedMapNum]);
+        if (exists.rowCount && exists.rowCount > 0) {
+            return { error: `El número de mapa ${requestedMapNum} ya está en uso.` };
+        }
+        mapNum = requestedMapNum;
+    } else {
+        mapNum = await allocateUserMapNumber();
+    }
+
     const res = await pool.query<UserMapRecord>(
-        `INSERT INTO user_maps (owner_account_id, name, map_data, npc_count, obj_count, state, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, 'draft', NOW(), NOW())
+        `INSERT INTO user_maps (owner_account_id, name, map_num, map_data, npc_count, obj_count, allow_combat, allow_exp, state, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, FALSE, FALSE, 'draft', NOW(), NOW())
          RETURNING *`,
-        [ownerAccountId, trimmedName, JSON.stringify(mapData), npcCount, objCount],
+        [ownerAccountId, trimmedName, mapNum, JSON.stringify(mapData), npcCount, objCount],
     );
     return toResponse(res.rows[0], true);
 }
@@ -218,6 +291,35 @@ export async function getMapById(
     const canSeeData = isOwner || isModerator;
 
     // Non-owners and non-moderators can only see published maps
+    if (!isOwner && !isModerator && map.state !== 'published') {
+        return null;
+    }
+
+    return toResponse(map, canSeeData);
+}
+
+export async function getMapByNumber(
+    mapNum: number,
+    requestingAccountId?: string,
+    isModerator = false,
+): Promise<UserMapResponse | null> {
+    if (!isUserMapNumber(mapNum)) {
+        return null;
+    }
+
+    const res = await pool.query<UserMapRecord & { reports_count?: string }>(
+        `SELECT m.*,
+                (SELECT COUNT(*) FROM user_map_reports r WHERE r.map_id = m.id) AS reports_count
+         FROM user_maps m
+         WHERE m.map_num = $1`,
+        [mapNum],
+    );
+    if (res.rowCount === 0) return null;
+
+    const map = res.rows[0];
+    const isOwner = map.owner_account_id === requestingAccountId;
+    const canSeeData = isOwner || isModerator;
+
     if (!isOwner && !isModerator && map.state !== 'published') {
         return null;
     }
@@ -253,16 +355,22 @@ export async function listOwnMaps(
 
 export async function updateMapDraft(
     mapId: string,
-    ownerAccountId: string,
+    requestingAccountId: string,
     updates: { name?: string; mapData?: UserMapData },
 ): Promise<UserMapResponse | { error: string } | null> {
     const existing = await pool.query<UserMapRecord>(
-        `SELECT * FROM user_maps WHERE id = $1 AND owner_account_id = $2`,
-        [mapId, ownerAccountId],
+        `SELECT * FROM user_maps WHERE id = $1`,
+        [mapId],
     );
     if (existing.rowCount === 0) return null;
 
     const current = existing.rows[0];
+
+    // Ownership check (Issue #24: Solo el dueño puede editar su mapa)
+    if (current.owner_account_id !== requestingAccountId) {
+        return { error: 'No autorizado: sólo el dueño puede modificar este mapa.' };
+    }
+
     if (current.state !== 'draft' && current.state !== 'rejected') {
         return { error: 'Solo se pueden editar mapas en estado borrador o rechazado.' };
     }
@@ -273,14 +381,30 @@ export async function updateMapDraft(
     }
 
     const newMapData = updates.mapData ?? current.map_data;
-    const { npcCount, objCount } = countEntities(newMapData);
 
-    const quota = await getQuota(ownerAccountId);
+    // Economy & World isolation validation
+    const economyCheck = validateEconomyIsolation(newMapData);
+    if (!economyCheck.ok) {
+        return { error: `Aislamiento de economía: ${economyCheck.errors.join(' | ')}` };
+    }
+
+    const worldCheck = validateWorldIsolation(newMapData);
+    if (!worldCheck.ok) {
+        return { error: `Aislamiento de mundo: ${worldCheck.errors.join(' | ')}` };
+    }
+
+    const { npcCount, objCount } = countEntities(newMapData);
+    const quota = await getQuota(requestingAccountId);
     if (npcCount > quota.maxNpcsPerMap) {
         return { error: `Cantidad de NPCs (${npcCount}) supera la cuota permitida (${quota.maxNpcsPerMap}).` };
     }
     if (objCount > quota.maxObjsPerMap) {
         return { error: `Cantidad de objetos (${objCount}) supera la cuota permitida (${quota.maxObjsPerMap}).` };
+    }
+
+    const byteSize = Buffer.byteLength(JSON.stringify(newMapData), 'utf8');
+    if (byteSize > quota.maxStorageBytes) {
+        return { error: `El peso del mapa (${byteSize} bytes) supera la cuota de almacenamiento (${quota.maxStorageBytes} bytes).` };
     }
 
     const res = await pool.query<UserMapRecord>(
@@ -297,13 +421,35 @@ export async function updateMapDraft(
     return toResponse(res.rows[0], true);
 }
 
+export async function deleteMap(
+    mapId: string,
+    requestingAccountId: string,
+): Promise<{ ok: boolean; error?: string }> {
+    const existing = await pool.query<UserMapRecord>(
+        `SELECT * FROM user_maps WHERE id = $1`,
+        [mapId],
+    );
+    if (existing.rowCount === 0) return { ok: false, error: 'Mapa no encontrado.' };
+
+    const current = existing.rows[0];
+    if (current.owner_account_id !== requestingAccountId) {
+        return { ok: false, error: 'No autorizado: sólo el dueño puede eliminar este mapa.' };
+    }
+
+    await pool.query(
+        `UPDATE user_maps SET state = 'archived', updated_at = NOW() WHERE id = $1`,
+        [mapId],
+    );
+    return { ok: true };
+}
+
 /**
  * Propose a map for moderation:
  * Runs automated pre-filtering checks before the map reaches human moderators.
  */
 export async function proposeMap(
     mapId: string,
-    ownerAccountId: string,
+    requestingAccountId: string,
 ): Promise<{
     ok: boolean;
     map?: UserMapResponse;
@@ -311,20 +457,24 @@ export async function proposeMap(
     error?: string;
 }> {
     const existing = await pool.query<UserMapRecord>(
-        `SELECT * FROM user_maps WHERE id = $1 AND owner_account_id = $2`,
-        [mapId, ownerAccountId],
+        `SELECT * FROM user_maps WHERE id = $1`,
+        [mapId],
     );
     if (existing.rowCount === 0) {
         return { ok: false, error: 'Mapa no encontrado.' };
     }
 
     const map = existing.rows[0];
+    if (map.owner_account_id !== requestingAccountId) {
+        return { ok: false, error: 'No autorizado: sólo el dueño puede proponer este mapa.' };
+    }
+
     if (map.state !== 'draft' && map.state !== 'rejected') {
         return { ok: false, error: `El mapa no se puede proponer desde el estado '${map.state}'.` };
     }
 
     // 1. Run automated pre-moderation checks
-    const quota = await getQuota(ownerAccountId);
+    const quota = await getQuota(requestingAccountId);
     const checks = runAutomatedMapChecks(map.name, map.map_data, quota);
 
     if (!checks.passed) {
@@ -377,7 +527,6 @@ export async function getModerationQueue(
         [states, limit, offset],
     );
 
-    // Reviewers get full mapData preview without needing to play the game
     return res.rows.map((row) => toResponse(row, true));
 }
 
@@ -492,11 +641,6 @@ export async function rejectMap(
     return { ok: true, map: toResponse(updated.rows[0], true) };
 }
 
-/**
- * Report a published map:
- * Any player can report a live map. Doing so automatically sends it back to 'in_review'
- * so it immediately reappears in the moderator queue for investigation.
- */
 export async function reportMap(
     mapId: string,
     reporterAccountId: string,
@@ -518,7 +662,6 @@ export async function reportMap(
         return { ok: false, error: 'Solo se pueden reportar mapas actualmente publicados.' };
     }
 
-    // Insert or update report by this reporter
     await pool.query(
         `INSERT INTO user_map_reports (map_id, reporter_account_id, reason, created_at)
          VALUES ($1, $2, $3, NOW())
@@ -527,7 +670,6 @@ export async function reportMap(
         [mapId, reporterAccountId, trimmedReason],
     );
 
-    // Send map back to 'in_review' so it enters the moderation queue
     await pool.query(
         `UPDATE user_maps
          SET state = 'in_review',
@@ -539,10 +681,6 @@ export async function reportMap(
     return { ok: true };
 }
 
-/**
- * Unpublish a published map:
- * Moderator action to take down an already published map if a problem emerges.
- */
 export async function unpublishMap(
     mapId: string,
     moderatorAccountId: string,

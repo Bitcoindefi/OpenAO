@@ -55,6 +55,25 @@ const DYNAMIC_INSTANCE_MAP_START = 30_000;
 const DYNAMIC_INSTANCE_MAP_STRIDE = 50;
 const CHALLENGE_INSTANCE_MAP_START = 2_000;
 const CHALLENGE_INSTANCE_BASE_MAP_ID = 506;
+
+/**
+ * Convención de rangos de ID de mapa (Issue #24):
+ * - 1 a ~500: Mundo oficial
+ * - 500 a 599: Mapas locales estáticos
+ * - 2.000 a 29.999: Retos
+ * - 30.000 a 99.999: Instancias dinámicas
+ * - 100.000 a 999.999: Mapas de usuario (aislado estructuralmente)
+ */
+export const USER_MAP_START = 100_000;
+export const USER_MAP_END = 999_999;
+
+export function isUserMap(mapNumber: number): boolean {
+    return mapNumber >= USER_MAP_START && mapNumber <= USER_MAP_END;
+}
+
+export function isOfficialWorldMap(mapNumber: number): boolean {
+    return mapNumber >= 1 && mapNumber < 500;
+}
 const MAP_ASSET_VERSIONS: Partial<Record<number, string>> = {
     166: "1.0",
     286: "1.2",
@@ -697,6 +716,68 @@ export async function loadMapData(mapNumber: number): Promise<MapData> {
                 );
                 mapValueCache.set(mapNumber, remappedData);
                 return remappedData;
+            }
+
+            if (isUserMap(mapNumber)) {
+                const userMapPayload = await fetchJsonWithFallback<{
+                    id: string;
+                    mapNum: number;
+                    name: string;
+                    mapData?: {
+                        terrain?: Array<{
+                            x: number;
+                            y: number;
+                            blocked?: boolean;
+                            layer?: number;
+                            grhIndex?: number | null;
+                        }>;
+                        meta?: {
+                            width?: number;
+                            height?: number;
+                        };
+                    };
+                }>(
+                    `${getApiBaseUrl()}/maps/user/by-number/${mapNumber}`,
+                    `${getApiBaseUrl()}/maps/user/by-number/${mapNumber}`,
+                    `user map ${mapNumber}`,
+                    { preferLocal: false },
+                );
+
+                const width = userMapPayload.mapData?.meta?.width ?? 100;
+                const height = userMapPayload.mapData?.meta?.height ?? 100;
+                const userMapData: MapData = {
+                    [String(mapNumber)]: {},
+                };
+                const mapEntry = userMapData[String(mapNumber)];
+
+                for (let y = 1; y <= height; y++) {
+                    mapEntry[String(y)] = {};
+                    for (let x = 1; x <= width; x++) {
+                        mapEntry[String(y)][String(x)] = {
+                            blocked: 0,
+                            graphics: { "1": 1 },
+                        };
+                    }
+                }
+
+                if (Array.isArray(userMapPayload.mapData?.terrain)) {
+                    for (const tile of userMapPayload.mapData.terrain) {
+                        const row = mapEntry[String(tile.y)];
+                        if (!row) continue;
+                        const t = row[String(tile.x)];
+                        if (!t) continue;
+                        if (tile.blocked !== undefined) {
+                            t.blocked = tile.blocked ? 1 : 0;
+                        }
+                        if (tile.grhIndex != null && tile.layer != null) {
+                            t.graphics = t.graphics ?? {};
+                            t.graphics[String(tile.layer)] = tile.grhIndex;
+                        }
+                    }
+                }
+
+                mapValueCache.set(mapNumber, userMapData);
+                return userMapData;
             }
 
             const assetMapNumber = dynamicBaseMapNumber

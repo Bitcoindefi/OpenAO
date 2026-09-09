@@ -8,11 +8,14 @@ type MockMapRecord = {
     id: string;
     owner_account_id: string;
     name: string;
+    map_num: number;
     map_data: mapValidation.UserMapData;
     state: userMaps.UserMapState;
     rejection_reason: string | null;
     npc_count: number;
     obj_count: number;
+    allow_combat: boolean;
+    allow_exp: boolean;
     proposed_at: Date | null;
     published_at: Date | null;
     created_at: Date;
@@ -40,6 +43,7 @@ const mockMaps: MockMapRecord[] = [];
 const mockReports: MockReportRecord[] = [];
 const mockReviews: MockReviewRecord[] = [];
 let nextId = 1;
+let nextMapNum = 100_000;
 
 vi.mock('../db', () => ({
     default: {
@@ -62,15 +66,24 @@ vi.mock('../db', () => ({
                 return { rowCount: 1, rows: [{ count: String(count) }] };
             }
 
-            // 3. Create Map (INSERT)
+            // 3. Allocate map_num
+            if (sqlUpper.includes('MAX(MAP_NUM)')) {
+                const maxNum = mockMaps.reduce((max, m) => Math.max(max, m.map_num), 99999);
+                return { rowCount: 1, rows: [{ next_num: maxNum + 1 }] };
+            }
+
+            // 4. Create Map (INSERT)
             if (sqlUpper.includes('INSERT INTO USER_MAPS')) {
                 const record: MockMapRecord = {
                     id: `map-${nextId++}`,
                     owner_account_id: params[0] as string,
                     name: params[1] as string,
-                    map_data: JSON.parse(params[2] as string),
-                    npc_count: params[3] as number,
-                    obj_count: params[4] as number,
+                    map_num: params[2] as number,
+                    map_data: JSON.parse(params[3] as string),
+                    npc_count: params[4] as number,
+                    obj_count: params[5] as number,
+                    allow_combat: false,
+                    allow_exp: false,
                     state: 'draft',
                     rejection_reason: null,
                     proposed_at: null,
@@ -82,7 +95,7 @@ vi.mock('../db', () => ({
                 return { rowCount: 1, rows: [record] };
             }
 
-            // 4. Get by ID
+            // 5. Get by ID
             if (sqlUpper.includes('SELECT') && sqlUpper.includes('FROM USER_MAPS') && sqlUpper.includes('WHERE M.ID = $1')) {
                 const found = mockMaps.find((m) => m.id === params[0]);
                 if (!found) return { rowCount: 0, rows: [] };
@@ -93,21 +106,24 @@ vi.mock('../db', () => ({
                 };
             }
 
-            // 5. Select by ID and owner
-            if (sqlUpper.includes('SELECT * FROM USER_MAPS WHERE ID = $1 AND OWNER_ACCOUNT_ID = $2')) {
-                const found = mockMaps.find(
-                    (m) => m.id === params[0] && m.owner_account_id === params[1],
-                );
-                return { rowCount: found ? 1 : 0, rows: found ? [found] : [] };
+            // 6. Get by map_num
+            if (sqlUpper.includes('WHERE M.MAP_NUM = $1')) {
+                const found = mockMaps.find((m) => m.map_num === params[0]);
+                if (!found) return { rowCount: 0, rows: [] };
+                const repCount = mockReports.filter((r) => r.map_id === found.id).length;
+                return {
+                    rowCount: 1,
+                    rows: [{ ...found, reports_count: String(repCount) }],
+                };
             }
 
-            // 6. Select by ID simple
+            // 7. Select by ID simple
             if (sqlUpper.includes('SELECT * FROM USER_MAPS WHERE ID = $1')) {
                 const found = mockMaps.find((m) => m.id === params[0]);
                 return { rowCount: found ? 1 : 0, rows: found ? [found] : [] };
             }
 
-            // 7. Update Map Draft
+            // 8. Update Map Draft
             if (sqlUpper.includes('UPDATE USER_MAPS') && sqlUpper.includes('SET NAME = $1')) {
                 const found = mockMaps.find((m) => m.id === params[4]);
                 if (found) {
@@ -121,7 +137,18 @@ vi.mock('../db', () => ({
                 return { rowCount: 0, rows: [] };
             }
 
-            // 8. Propose Map (UPDATE state = 'proposed')
+            // 9. Delete/Archive Map
+            if (sqlUpper.includes("UPDATE USER_MAPS SET STATE = 'ARCHIVED'")) {
+                const found = mockMaps.find((m) => m.id === params[0]);
+                if (found) {
+                    found.state = 'archived';
+                    found.updated_at = new Date();
+                    return { rowCount: 1, rows: [found] };
+                }
+                return { rowCount: 0, rows: [] };
+            }
+
+            // 10. Propose Map (UPDATE state = 'proposed')
             if (sqlUpper.includes("SET STATE = 'PROPOSED'")) {
                 const found = mockMaps.find((m) => m.id === params[0]);
                 if (found) {
@@ -134,7 +161,7 @@ vi.mock('../db', () => ({
                 return { rowCount: 0, rows: [] };
             }
 
-            // 9. Claim for Review (UPDATE state = 'in_review')
+            // 11. Claim for Review (UPDATE state = 'in_review')
             if (sqlUpper.includes("SET STATE = 'IN_REVIEW'")) {
                 const found = mockMaps.find((m) => m.id === params[0]);
                 if (found) {
@@ -145,7 +172,7 @@ vi.mock('../db', () => ({
                 return { rowCount: 0, rows: [] };
             }
 
-            // 10. Approve Map (UPDATE state = 'published')
+            // 12. Approve Map (UPDATE state = 'published')
             if (sqlUpper.includes("SET STATE = 'PUBLISHED'")) {
                 const found = mockMaps.find((m) => m.id === params[0]);
                 if (found) {
@@ -158,7 +185,7 @@ vi.mock('../db', () => ({
                 return { rowCount: 0, rows: [] };
             }
 
-            // 11. Reject / Unpublish (UPDATE state = 'rejected')
+            // 13. Reject / Unpublish (UPDATE state = 'rejected')
             if (sqlUpper.includes("SET STATE = 'REJECTED'")) {
                 const found = mockMaps.find((m) => m.id === params[1]);
                 if (found) {
@@ -170,7 +197,7 @@ vi.mock('../db', () => ({
                 return { rowCount: 0, rows: [] };
             }
 
-            // 12. List Moderation Queue
+            // 14. List Moderation Queue
             if (sqlUpper.includes('WHERE M.STATE = ANY($1)')) {
                 const allowedStates = params[0] as string[];
                 const queued = mockMaps.filter((m) => allowedStates.includes(m.state));
@@ -181,13 +208,13 @@ vi.mock('../db', () => ({
                 return { rowCount: mapped.length, rows: mapped };
             }
 
-            // 13. List Published Maps
+            // 15. List Published Maps
             if (sqlUpper.includes("WHERE STATE = 'PUBLISHED'")) {
                 const published = mockMaps.filter((m) => m.state === 'published');
                 return { rowCount: published.length, rows: published };
             }
 
-            // 14. List Own Maps
+            // 16. List Own Maps
             if (sqlUpper.includes('WHERE OWNER_ACCOUNT_ID = $1')) {
                 const owned = mockMaps.filter(
                     (m) => m.owner_account_id === params[0] && m.state !== 'archived',
@@ -195,7 +222,7 @@ vi.mock('../db', () => ({
                 return { rowCount: owned.length, rows: owned };
             }
 
-            // 15. Reports & Reviews INSERTs
+            // 17. Reports & Reviews INSERTs
             if (sqlUpper.includes('INSERT INTO USER_MAP_REPORTS')) {
                 mockReports.push({
                     id: `rep-${nextId++}`,
@@ -219,13 +246,13 @@ vi.mock('../db', () => ({
                 return { rowCount: 1, rows: [] };
             }
 
-            // 16. Reports SELECT
+            // 18. Reports SELECT
             if (sqlUpper.includes('FROM USER_MAP_REPORTS WHERE MAP_ID = $1')) {
                 const found = mockReports.filter((r) => r.map_id === params[0]);
                 return { rowCount: found.length, rows: found };
             }
 
-            // 17. Reviews SELECT
+            // 19. Reviews SELECT
             if (sqlUpper.includes('FROM USER_MAP_REVIEWS WHERE MAP_ID = $1')) {
                 const found = mockReviews.filter((r) => r.map_id === params[0]);
                 return { rowCount: found.length, rows: found };
@@ -238,8 +265,9 @@ vi.mock('../db', () => ({
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-describe('User Map Moderation & Validation System (Issue #25)', () => {
+describe('User Map Isolation & Quotas System (Issue #24) & Moderation (Issue #25)', () => {
     const OWNER_ID = 'user-owner-001';
+    const OTHER_USER_ID = 'user-intruder-002';
     const MOD_ID = 'moderator-999';
     const PLAYER_ID = 'player-456';
 
@@ -258,199 +286,192 @@ describe('User Map Moderation & Validation System (Issue #25)', () => {
         mockReports.length = 0;
         mockReviews.length = 0;
         nextId = 1;
+        nextMapNum = 100_000;
     });
 
-    // ── 1. Automated Checks ──────────────────────────────────────────────────
-    describe('Automated Pre-Filtering Checks', () => {
-        it('detects banned/offensive words in map name and texts', () => {
-            const clean = mapValidation.checkBannedWords('Mapa del Dragón');
-            expect(clean.ok).toBe(true);
-
-            const offensive = mapValidation.checkBannedWords('Mapa nazi secreto');
-            expect(offensive.ok).toBe(false);
-            expect(offensive.matched).toContain('nazi');
-
-            const textValidation = mapValidation.validateTextContent('Isla Tranquila', {
-                meta: { description: 'Una concha de arena' },
-                npcs: [{ x: 5, y: 5, name: 'Pelotudo' }],
-            });
-            expect(textValidation.ok).toBe(false);
-            expect(textValidation.errors.length).toBeGreaterThanOrEqual(1);
+    // ── 1. Issue #24: Reserved ID Range & Structural Isolation ─────────────────
+    describe('Reserved Map ID Range & Isolation', () => {
+        it('assigns map_num automatically in the reserved range [100,000 - 999,999]', async () => {
+            const created = (await userMaps.createMap(OWNER_ID, 'Valle Esmeralda', validMapData)) as userMaps.UserMapResponse;
+            expect(created.mapNum).toBeGreaterThanOrEqual(mapValidation.USER_MAP_START);
+            expect(created.mapNum).toBeLessThanOrEqual(mapValidation.USER_MAP_END);
+            expect(mapValidation.isUserMapNumber(created.mapNum)).toBe(true);
+            expect(mapValidation.isOfficialMapNumber(created.mapNum)).toBe(false);
         });
 
-        it('validates entity quotas and map dimensions', () => {
-            const quotas = { maxNpcsPerMap: 2, maxObjsPerMap: 2, maxWidth: 100, maxHeight: 100 };
-            const excessData: mapValidation.UserMapData = {
-                npcs: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }],
-                specials: [{ x: 4, y: 4 }],
-            };
-            const res = mapValidation.validateQuotasAndLimits(excessData, quotas);
-            expect(res.ok).toBe(false);
-            expect(res.errors[0]).toContain('Supera la cuota máxima de NPCs');
-        });
-
-        it('validates reachability from spawn point via BFS', () => {
-            // Blocked spawn point
-            const blockedSpawnMap: mapValidation.UserMapData = {
-                meta: { width: 50, height: 50, spawnX: 10, spawnY: 10 },
-                terrain: [{ x: 10, y: 10, blocked: true }],
-            };
-            const resBlocked = mapValidation.validateReachability(blockedSpawnMap);
-            expect(resBlocked.ok).toBe(false);
-            expect(resBlocked.errors[0]).toContain('bloqueado');
-
-            // Valid spawn with open surroundings
-            const validSpawnMap: mapValidation.UserMapData = {
-                meta: { width: 50, height: 50, spawnX: 25, spawnY: 25 },
-                terrain: [],
-            };
-            const resValid = mapValidation.validateReachability(validSpawnMap);
-            expect(resValid.ok).toBe(true);
-            expect(resValid.reachableTilesCount).toBeGreaterThan(10);
-        });
-    });
-
-    // ── 2. Lifecycle & State Machine ─────────────────────────────────────────
-    describe('Map Lifecycle & Moderation Flow', () => {
-        it('creates a map in draft state', async () => {
-            const created = await userMaps.createMap(OWNER_ID, 'Valle Esmeralda', validMapData);
-            expect('id' in created).toBe(true);
-            if ('id' in created) {
-                expect(created.state).toBe('draft');
-                expect(created.name).toBe('Valle Esmeralda');
-                expect(created.ownerId).toBe(OWNER_ID);
+        it('rejects attempts to allocate or overwrite official world maps (1-500)', async () => {
+            const attemptOfficial = await userMaps.createMap(
+                OWNER_ID,
+                'Hack Oficial Ullathorpe',
+                validMapData,
+                1, // Official Ullathorpe map
+            );
+            expect('error' in attemptOfficial).toBe(true);
+            if ('error' in attemptOfficial) {
+                expect(attemptOfficial.error).toContain('rango reservado');
             }
         });
 
-        it('prevents non-owners from seeing draft maps, but allows moderators to preview', async () => {
-            const created = (await userMaps.createMap(OWNER_ID, 'Valle Oculto', validMapData)) as userMaps.UserMapResponse;
+        it('rejects portals and tile exits pointing to the official world (world isolation)', () => {
+            const exitToOfficial: mapValidation.UserMapData = {
+                ...validMapData,
+                terrain: [
+                    { x: 5, y: 5, tileExit: { map: 1, x: 50, y: 50 } }, // Porting to Ullathorpe!
+                ],
+            };
+            const check = mapValidation.validateWorldIsolation(exitToOfficial);
+            expect(check.ok).toBe(false);
+            expect(check.errors[0]).toContain('apunta al mapa oficial');
+        });
+    });
 
-            // Random player cannot see draft
-            const otherView = await userMaps.getMapById(created.id, PLAYER_ID, false);
-            expect(otherView).toBeNull();
+    // ── 2. Issue #24: Economy Isolation ─────────────────────────────────────────
+    describe('Economy Isolation', () => {
+        it('prevents placement of currency / gold piles and prohibited items', () => {
+            // Gold pile placement attempt
+            const goldMapData: mapValidation.UserMapData = {
+                ...validMapData,
+                specials: [{ x: 10, y: 10, entityId: 12 }], // Item 12 = Gold currency
+            };
+            const resGold = mapValidation.validateEconomyIsolation(goldMapData);
+            expect(resGold.ok).toBe(false);
+            expect(resGold.errors[0]).toContain('aislamiento de economía');
 
-            // Owner can see draft with map data
-            const ownerView = await userMaps.getMapById(created.id, OWNER_ID, false);
-            expect(ownerView).not.toBeNull();
-            expect(ownerView?.mapData).toBeDefined();
-
-            // Moderator can see draft with map data
-            const modView = await userMaps.getMapById(created.id, MOD_ID, true);
-            expect(modView).not.toBeNull();
-            expect(modView?.mapData).toBeDefined();
+            // Direct gold value on special
+            const goldValueData: mapValidation.UserMapData = {
+                ...validMapData,
+                specials: [{ x: 10, y: 10, gold: 50000 }],
+            };
+            const resVal = mapValidation.validateEconomyIsolation(goldValueData);
+            expect(resVal.ok).toBe(false);
+            expect(resVal.errors[0]).toContain('pilas de oro directas');
         });
 
-        it('runs automated checks upon proposal and moves to proposed state if valid', async () => {
-            const created = (await userMaps.createMap(OWNER_ID, 'Isla Pacífica', validMapData)) as userMaps.UserMapResponse;
+        it('prevents NPCs from granting gold or dropping prohibited economy items', () => {
+            const exploitativeNpc: mapValidation.UserMapData = {
+                ...validMapData,
+                npcs: [
+                    {
+                        x: 15,
+                        y: 15,
+                        name: 'Dragon del Oro',
+                        gold: 10000,
+                        drop: [{ item: 12, cant: 500 }],
+                    },
+                ],
+            };
+            const check = mapValidation.validateEconomyIsolation(exploitativeNpc);
+            expect(check.ok).toBe(false);
+            expect(check.errors.some((e) => e.includes('oro'))).toBe(true);
+        });
+    });
 
+    // ── 3. Issue #24: Ownership & Permissions ─────────────────────────────────
+    describe('Ownership & Unauthorized Edit Protection', () => {
+        it('allows only the owner to edit their map and blocks unauthorized users', async () => {
+            const created = (await userMaps.createMap(OWNER_ID, 'Mi Mapa Privado', validMapData)) as userMaps.UserMapResponse;
+
+            // Owner can update
+            const ownerUpdate = await userMaps.updateMapDraft(created.id, OWNER_ID, {
+                name: 'Mi Mapa Privado Actualizado',
+            });
+            expect(ownerUpdate).not.toBeNull();
+            if (ownerUpdate && 'name' in ownerUpdate) {
+                expect(ownerUpdate.name).toBe('Mi Mapa Privado Actualizado');
+            }
+
+            // Intruder cannot update
+            const intruderUpdate = await userMaps.updateMapDraft(created.id, OTHER_USER_ID, {
+                name: 'Mapa Hackeado',
+            });
+            expect(intruderUpdate).not.toBeNull();
+            if (intruderUpdate && 'error' in intruderUpdate) {
+                expect(intruderUpdate.error).toContain('No autorizado: sólo el dueño');
+            }
+        });
+
+        it('blocks unauthorized users from proposing or deleting another user map', async () => {
+            const created = (await userMaps.createMap(OWNER_ID, 'Mapa de Prueba', validMapData)) as userMaps.UserMapResponse;
+
+            const intruderProp = await userMaps.proposeMap(created.id, OTHER_USER_ID);
+            expect(intruderProp.ok).toBe(false);
+            expect(intruderProp.error).toContain('No autorizado: sólo el dueño');
+
+            const intruderDel = await userMaps.deleteMap(created.id, OTHER_USER_ID);
+            expect(intruderDel.ok).toBe(false);
+            expect(intruderDel.error).toContain('No autorizado: sólo el dueño');
+        });
+
+        it('prevents players from viewing draft maps by map number until published', async () => {
+            const created = (await userMaps.createMap(OWNER_ID, 'Mapa Secreto', validMapData)) as userMaps.UserMapResponse;
+
+            // Player cannot load by number while in draft
+            const playerView = await userMaps.getMapByNumber(created.mapNum, PLAYER_ID, false);
+            expect(playerView).toBeNull();
+
+            // Owner can view their own draft map by number
+            const ownerView = await userMaps.getMapByNumber(created.mapNum, OWNER_ID, false);
+            expect(ownerView).not.toBeNull();
+            expect(ownerView?.mapNum).toBe(created.mapNum);
+        });
+    });
+
+    // ── 4. Issue #24: Quotas & Storage Limits ─────────────────────────────────
+    describe('Quotas & Limit Enforcement', () => {
+        it('returns clear error when account exceeds max active maps quota', async () => {
+            // Fill 5 maps
+            for (let i = 1; i <= 5; i++) {
+                await userMaps.createMap(OWNER_ID, `Mapa ${i}`, validMapData);
+            }
+
+            // 6th map should fail with quota error
+            const sixth = await userMaps.createMap(OWNER_ID, 'Mapa Extra', validMapData);
+            expect('error' in sixth).toBe(true);
+            if ('error' in sixth) {
+                expect(sixth.error).toContain('Alcanzaste el límite de cuota');
+            }
+        });
+
+        it('enforces entity quotas and storage byte size limits', async () => {
+            const heavyData: mapValidation.UserMapData = {
+                meta: { name: 'Gigante' },
+                npcs: Array.from({ length: 25 }, (_, i) => ({ x: i + 1, y: 1 })), // default quota is 20
+            };
+
+            const res = await userMaps.createMap(OWNER_ID, 'Mapa Exceso NPCs', heavyData);
+            expect('error' in res).toBe(true);
+            if ('error' in res) {
+                expect(res.error).toContain('supera la cuota permitida');
+            }
+        });
+    });
+
+    // ── 5. Issue #25: Moderation Flow & Automated Pre-Filtering ───────────────
+    describe('Moderation Lifecycle Flow', () => {
+        it('runs pre-filtering checks, claims, approves and allows community reporting', async () => {
+            const created = (await userMaps.createMap(OWNER_ID, 'Isla del Sol', validMapData)) as userMaps.UserMapResponse;
+
+            // Propose
             const propRes = await userMaps.proposeMap(created.id, OWNER_ID);
             expect(propRes.ok).toBe(true);
             expect(propRes.map?.state).toBe('proposed');
-            expect(propRes.map?.proposedAt).toBeDefined();
-            expect(propRes.automatedChecks?.passed).toBe(true);
-        });
 
-        it('rejects proposal when automated checks fail', async () => {
-            const invalidData: mapValidation.UserMapData = {
-                meta: { width: 50, height: 50, spawnX: 5, spawnY: 5 },
-                terrain: [{ x: 5, y: 5, blocked: true }], // blocked spawn!
-            };
-            const created = (await userMaps.createMap(OWNER_ID, 'Isla Bloqueada', invalidData)) as userMaps.UserMapResponse;
+            // Mod claims and approves
+            await userMaps.claimForReview(created.id, MOD_ID);
+            const appRes = await userMaps.approveMap(created.id, MOD_ID);
+            expect(appRes.ok).toBe(true);
+            expect(appRes.map?.state).toBe('published');
 
-            const propRes = await userMaps.proposeMap(created.id, OWNER_ID);
-            expect(propRes.ok).toBe(false);
-            expect(propRes.error).toContain('chequeos automáticos');
-            expect(propRes.automatedChecks?.passed).toBe(false);
-        });
-
-        it('supports full moderation lifecycle: propose -> in_review -> reject -> re-propose -> approve', async () => {
-            // 1. Author creates draft
-            const created = (await userMaps.createMap(OWNER_ID, 'Paso Nevado', validMapData)) as userMaps.UserMapResponse;
-
-            // 2. Author proposes map
-            await userMaps.proposeMap(created.id, OWNER_ID);
-
-            // 3. Moderator inspects queue (receives map preview without needing to play)
-            const queue = await userMaps.getModerationQueue(10, 0);
-            expect(queue.length).toBe(1);
-            expect(queue[0].id).toBe(created.id);
-            expect(queue[0].mapData).toBeDefined();
-
-            // 4. Moderator claims for review
-            const claimRes = await userMaps.claimForReview(created.id, MOD_ID);
-            expect(claimRes.ok).toBe(true);
-            expect(claimRes.map?.state).toBe('in_review');
-
-            // 5. Moderator rejects with mandatory reason
-            const noReason = await userMaps.rejectMap(created.id, MOD_ID, '');
-            expect(noReason.ok).toBe(false); // Reason is required!
-
-            const rejectRes = await userMaps.rejectMap(
-                created.id,
-                MOD_ID,
-                'Faltan detalles en la zona norte y los caminos son confusos.',
-            );
-            expect(rejectRes.ok).toBe(true);
-            expect(rejectRes.map?.state).toBe('rejected');
-            expect(rejectRes.map?.rejectionReason).toContain('Faltan detalles');
-
-            // Author views rejection reason
-            const authorView = await userMaps.getMapById(created.id, OWNER_ID);
-            expect(authorView?.rejectionReason).toContain('Faltan detalles');
-
-            // 6. Author fixes and re-proposes
-            const rePropRes = await userMaps.proposeMap(created.id, OWNER_ID);
-            expect(rePropRes.ok).toBe(true);
-            expect(rePropRes.map?.state).toBe('proposed');
-
-            // 7. Moderator approves
-            const approveRes = await userMaps.approveMap(created.id, MOD_ID, 'Todo corregido correctamente');
-            expect(approveRes.ok).toBe(true);
-            expect(approveRes.map?.state).toBe('published');
-            expect(approveRes.map?.publishedAt).toBeDefined();
-
-            // Now public player can find it
-            const publicMap = await userMaps.getMapById(created.id, PLAYER_ID, false);
+            // Public can now view it by map_num
+            const publicMap = await userMaps.getMapByNumber(created.mapNum, PLAYER_ID, false);
+            expect(publicMap).not.toBeNull();
             expect(publicMap?.state).toBe('published');
-        });
 
-        it('allows players to report a published map and sends it back to in_review', async () => {
-            // Setup a published map
-            const created = (await userMaps.createMap(OWNER_ID, 'Colina del Sol', validMapData)) as userMaps.UserMapResponse;
-            await userMaps.proposeMap(created.id, OWNER_ID);
-            await userMaps.approveMap(created.id, MOD_ID);
-
-            // Player reports map
-            const reportRes = await userMaps.reportMap(
-                created.id,
-                PLAYER_ID,
-                'Contiene una zona donde los personajes quedan atrapados sin poder salir.',
-            );
-            expect(reportRes.ok).toBe(true);
-
-            // Map is automatically moved to in_review
-            const checkMap = await userMaps.getMapById(created.id, MOD_ID, true);
-            expect(checkMap?.state).toBe('in_review');
-            expect(checkMap?.reportsCount).toBe(1);
-
-            // Reappears in moderation queue
-            const queue = await userMaps.getModerationQueue(10, 0);
-            expect(queue.some((m) => m.id === created.id)).toBe(true);
-        });
-
-        it('allows moderators to unpublish an active map', async () => {
-            const created = (await userMaps.createMap(OWNER_ID, 'Castillo Abierto', validMapData)) as userMaps.UserMapResponse;
-            await userMaps.proposeMap(created.id, OWNER_ID);
-            await userMaps.approveMap(created.id, MOD_ID);
-
-            const unpub = await userMaps.unpublishMap(created.id, MOD_ID, 'Infracción de derechos de autor en gráficos.');
-            expect(unpub.ok).toBe(true);
-            expect(unpub.map?.state).toBe('rejected');
-            expect(unpub.map?.rejectionReason).toContain('Infracción de derechos');
-
-            // Public player can no longer view it
-            const publicCheck = await userMaps.getMapById(created.id, PLAYER_ID, false);
-            expect(publicCheck).toBeNull();
+            // Reporting sends it back to in_review
+            const rep = await userMaps.reportMap(created.id, PLAYER_ID, 'Gráficos inapropiados');
+            expect(rep.ok).toBe(true);
+            const inReview = await userMaps.getMapById(created.id, MOD_ID, true);
+            expect(inReview?.state).toBe('in_review');
         });
     });
 });

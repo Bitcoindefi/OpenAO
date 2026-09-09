@@ -117,7 +117,9 @@ import {
     approveMap,
     claimForReview,
     createMap,
+    deleteMap,
     getMapById,
+    getMapByNumber,
     getMapReports,
     getMapReviews,
     getModerationQueue,
@@ -1320,6 +1322,64 @@ app.get("/maps/user/:id", async (request, response) => {
         }
 
         response.json(map);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Obtener un mapa por número en el rango reservado (100,000 - 999,999) */
+app.get("/maps/user/by-number/:mapNum", async (request, response) => {
+    try {
+        const mapNum = Number.parseInt(request.params.mapNum, 10);
+        if (!Number.isInteger(mapNum)) {
+            response.status(400).json({ error: "Número de mapa inválido." });
+            return;
+        }
+
+        const authorized = await getAuthorizedSession(request);
+        const isMod = Boolean(
+            authorized && isAuthorizedGameDataAdmin(authorized.session),
+        );
+
+        const map = await getMapByNumber(
+            mapNum,
+            authorized?.session.account._id,
+            isMod,
+        );
+
+        if (!map) {
+            response.status(404).json({ error: "Mapa no encontrado o no disponible." });
+            return;
+        }
+
+        response.json(map);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Eliminar/archivar mapa (sólo dueño) */
+app.delete("/maps/user/:id", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        const mapId = request.params.id;
+        const result = await deleteMap(mapId, authorized.session.account._id);
+        if (!result.ok) {
+            const status = result.error?.includes("No autorizado") ? 403 : 400;
+            response.status(status).json({ error: result.error });
+            return;
+        }
+
+        response.json({ ok: true, message: "Mapa archivado correctamente." });
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
