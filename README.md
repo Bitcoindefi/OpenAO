@@ -163,6 +163,14 @@ pnpm install
 pnpm dev
 ```
 
+> **Nota sobre los mapas:** El cliente web requiere los mapas optimizados en `frontend/public/maps_optimized/`. El script de `predev` y `prebuild` los genera automáticamente desde `server/mapas_source/` si aún no existen. Si querés generarlos o actualizarlos manualmente:
+> ```bash
+> cd server && pnpm export-frontend-maps
+> # o desde la carpeta frontend:
+> cd frontend && pnpm maps:export
+> ```
+> En los builds de Docker, `frontend/Dockerfile` copia `server/mapas_source/` durante la etapa de construcción para garantizar que todos los mapas estén presentes en la imagen final.
+
 Abrir `http://localhost:3000`.
 
 ## Arquitectura
