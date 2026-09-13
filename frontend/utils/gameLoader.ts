@@ -55,6 +55,14 @@ const DYNAMIC_INSTANCE_MAP_START = 30_000;
 const DYNAMIC_INSTANCE_MAP_STRIDE = 50;
 const CHALLENGE_INSTANCE_MAP_START = 2_000;
 const CHALLENGE_INSTANCE_BASE_MAP_ID = 506;
+
+// Reserved for user-created maps (issue #24). Official maps live below 600,
+// dynamic instances start at 30_000 and challenge instances at 2_000, so this
+// band cannot collide with any system-generated map ID.
+export const USER_MAP_ID_RANGE = {
+    min: 600,
+    max: 1999,
+} as const;
 const MAP_ASSET_VERSIONS: Partial<Record<number, string>> = {
     166: "1.0",
     286: "1.2",
@@ -74,6 +82,24 @@ function getBaseMapIdFromDynamicInstance(mapNumber: number): number | null {
     return Math.floor(
         (mapNumber - DYNAMIC_INSTANCE_MAP_START) / DYNAMIC_INSTANCE_MAP_STRIDE,
     );
+}
+
+export function isUserMapId(mapNumber: number): boolean {
+    return (
+        Number.isInteger(mapNumber) &&
+        mapNumber >= USER_MAP_ID_RANGE.min &&
+        mapNumber <= USER_MAP_ID_RANGE.max
+    );
+}
+
+export function assertUserMapId(mapNumber: number): number {
+    if (!isUserMapId(mapNumber)) {
+        throw new Error(
+            `Invalid user map ID ${mapNumber}: user map IDs must be between ${USER_MAP_ID_RANGE.min} and ${USER_MAP_ID_RANGE.max}.`,
+        );
+    }
+
+    return mapNumber;
 }
 
 function withMapAssetVersion(path: string, mapNumber: number): string {
