@@ -1,0 +1,2 @@
+- 2026-09-13: fix(user-maps) deduped duplicate imports in userMapLifecycle.test.ts; lifecycle + permissions suites green; committed.
+- 2026-09-13: test(user-maps) full verification: API 76/76, frontend 6/6, permissions 9/9, lifecycle green; test infra runner added; committed.
