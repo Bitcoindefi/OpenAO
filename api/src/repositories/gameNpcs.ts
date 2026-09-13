@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import { z } from "zod";
 import pool from "../db";
 import {
+import { assertNoUserMapRewards } from "../lib/userMapLifecycle";
     computeChecksum,
     loadSeedNpcsJson,
     normalizeNpcData,
@@ -137,7 +138,16 @@ function isHostileNpc(data: GameNpcRecordData): boolean {
 
 function compactFrontendNpcData(
     data: GameNpcRecordData,
+    sourceMapId?: number,
 ): FrontendNpcExportData {
+    // Economic-safety: block reward exports sourced from user maps.
+    if (sourceMapId !== undefined) {
+        assertNoUserMapRewards({
+            sourceMapId,
+            exp: Number(normalizeNpcData(data).exp ?? 0),
+            gold: Number(normalizeNpcData(data).gold ?? 0),
+        });
+    }
     const normalized = normalizeNpcData(data);
     const dropEntries = Array.isArray(normalized.drop) ? normalized.drop : [];
     const frontendNpc: FrontendNpcExportData = {
@@ -283,8 +293,20 @@ export async function getCurrentGameNpcVersion(): Promise<number> {
     return Number(result.rows[0]?.version ?? 0);
 }
 
-function toGameNpcSummary(row: GameNpcRow) {
+function toGameNpcSummary(
+    row: GameNpcRow,
+    sourceMapId?: number,
+) {
     const maxHp = Number(row.data.maxHp ?? row.data.hp ?? 0);
+    // Economic-safety: user maps (IDs 600-1999) can never emit gold or XP,
+    // regardless of lifecycle state or caller.
+    if (sourceMapId !== undefined) {
+        assertNoUserMapRewards({
+            sourceMapId,
+            exp: Number(row.data.exp ?? 0),
+            gold: Number(row.data.gold ?? 0),
+        });
+    }
     const expReward = Math.floor(
         Number(row.data.exp ?? 0) * CURRENT_EXP_MULTIPLIER,
     );
