@@ -1,6 +1,7 @@
-import { canEmitRewards, assertNoUserMapRewards, USER_MAP_LIFECYCLE_STATES } from "./userMapLifecycle";
-import { describe, expect, it } from "vitest";
 import {
+  USER_MAP_LIFECYCLE_STATES,
+  USER_MAP_MAX_ID,
+  USER_MAP_MIN_ID,
   assertNoUserMapRewards,
   assertUserMapEditable,
   assertUserMapTransition,
@@ -9,10 +10,9 @@ import {
   canTransitionUserMap,
   isUserMapId,
   isValidLifecycleState,
-  USER_MAP_MAX_ID,
-  USER_MAP_MIN_ID,
   type UserMapLifecycleState,
 } from "./userMapLifecycle";
+import { describe, expect, it } from "vitest";
 
 const ALL: UserMapLifecycleState[] = ["draft", "proposed", "published", "archived"];
 
