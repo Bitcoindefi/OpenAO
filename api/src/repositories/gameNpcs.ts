@@ -1,8 +1,8 @@
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import pool from "../db";
-import {
 import { assertNoUserMapRewards } from "../lib/userMapLifecycle";
+import {
     computeChecksum,
     loadSeedNpcsJson,
     normalizeNpcData,
