@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, test } from "vitest";
+import { afterAll, afterEach, beforeAll, test } from "vitest";
 import pool from "../db";
 import { importSourceMaps, getGameMapById, upsertGameMap } from "../repositories/gameMaps";
 
@@ -14,6 +14,11 @@ afterAll(async () => {
     await pool.query("DELETE FROM game_data_revisions WHERE kind = 'maps' AND entity_id = $1", [TEST_MAP_ID]);
     await pool.query("DELETE FROM game_maps WHERE id = $1", [TEST_MAP_ID]);
     await pool.end();
+});
+
+afterEach(async () => {
+    await pool.query("DELETE FROM game_data_revisions WHERE kind = 'maps' AND entity_id = $1", [TEST_MAP_ID]);
+    await pool.query("DELETE FROM game_maps WHERE id = $1", [TEST_MAP_ID]);
 });
 
 test("imports all source maps once and does not duplicate revisions on a second import", async () => {
