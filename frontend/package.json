@@ -6,10 +6,11 @@
         "protocol:build": "pnpm exec tsc -p ../packages/protocol/tsconfig.json",
         "predev": "pnpm run protocol:build",
         "dev": "next dev --turbopack --hostname 0.0.0.0",
-        "prebuild": "pnpm run protocol:build",
+        "prebuild": "node scripts/check-maps.mjs && pnpm run protocol:build",
         "build": "next build",
         "start": "next start",
         "lint": "eslint",
+        "test:maps": "node --test tests/check-maps.test.mjs",
         "generate:headswithfile": "node ./scripts/generate-headswithfile.mjs"
     },
     "dependencies": {

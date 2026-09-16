@@ -194,6 +194,15 @@ jobs:
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
+      - name: Test map build validation
+        working-directory: frontend
+        run: pnpm run test:maps
+
+      - name: Generate frontend maps
+        run: |
+          pnpm --dir server install --frozen-lockfile
+          pnpm --dir server export-frontend-maps
+
       - name: Lint
         working-directory: frontend
         run: pnpm run lint
@@ -238,3 +247,21 @@ jobs:
           context: .
           file: ./frontend/Dockerfile
           push: false
+          load: true
+          tags: openao-frontend:ci
+
+      - name: Check maps in the final frontend image
+        run: |
+          docker run --rm --entrypoint node openao-frontend:ci -e '
+            const fs = require("node:fs");
+            const assert = require("node:assert/strict");
+            const dir = "public/maps_optimized";
+            const names = fs.readdirSync(dir).filter(name => /^mapa_\d+\.json$/.test(name));
+            assert(names.includes("mapa_1.json"));
+            for (const name of names) {
+              const map = JSON.parse(fs.readFileSync(dir + "/" + name, "utf8"));
+              assert(map.w > 0 && map.h > 0);
+              assert.equal(map.d.length, map.w * map.h, name);
+            }
+            console.log("Verified " + names.length + " maps in the runtime image.");
+          '
