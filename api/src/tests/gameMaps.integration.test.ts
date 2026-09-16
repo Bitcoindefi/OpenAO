@@ -55,6 +55,23 @@ test("an edited map is read from DB with a revision and checksum", async () => {
     assert.equal(await countRevisions(TEST_MAP_ID), 1);
 });
 
+test("the importer preserves an edited DB map", async () => {
+    await importSourceMaps();
+
+    const editedData = {
+        meta: { id: 1, name: "Mapa editado" },
+        terrain: { width: 10, height: 10, palette: {}, rows: [] },
+        specials: { exits: {}, objects: {}, npcs: {}, triggers: {} },
+        npcs: [],
+    };
+
+    await upsertGameMap(1, editedData);
+    await importSourceMaps();
+    const map = await getGameMapById(1);
+
+    assert.equal(map?.name, "Mapa editado");
+});
+
 test("an unchanged map edit does not create another revision", async () => {
     const data = {
         meta: { id: TEST_MAP_ID, name: "Mapa de prueba" },
