@@ -6,14 +6,16 @@ ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
 
 FROM base AS deps
-WORKDIR /app
+WORKDIR /app/frontend
 
-COPY package.json pnpm-lock.yaml ./
-COPY pnpm-workspace.yaml ./
+COPY packages/protocol/package.json /app/packages/protocol/package.json
+COPY packages/protocol/src /app/packages/protocol/src
+COPY packages/protocol/tsconfig.json /app/packages/protocol/tsconfig.json
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
-WORKDIR /app
+WORKDIR /app/frontend
 
 ARG API_BASE_URL=http://localhost:3001
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
@@ -40,22 +42,26 @@ ENV SITE_URL=$SITE_URL
 ENV NEXT_BUILD_ID=$NEXT_BUILD_ID
 ENV GAME_DATA_ADMIN_PROXY_TOKEN=$GAME_DATA_ADMIN_PROXY_TOKEN
 
-COPY . .
+COPY packages/protocol /app/packages/protocol
+COPY frontend .
 RUN pnpm build
 
 FROM base AS runtime
-WORKDIR /app
+WORKDIR /app/frontend
 
 ENV NODE_ENV=production
 ENV PORT=3000
 
-COPY package.json pnpm-lock.yaml ./
-COPY pnpm-workspace.yaml ./
+COPY packages/protocol/package.json /app/packages/protocol/package.json
+COPY packages/protocol/src /app/packages/protocol/src
+COPY packages/protocol/tsconfig.json /app/packages/protocol/tsconfig.json
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --prod --frozen-lockfile
 
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/public ./public
-COPY --from=build /app/next.config.ts ./next.config.ts
+COPY --from=build /app/packages/protocol/dist /app/packages/protocol/dist
+COPY --from=build /app/frontend/.next ./.next
+COPY --from=build /app/frontend/public ./public
+COPY --from=build /app/frontend/next.config.ts ./next.config.ts
 
 EXPOSE 3000
 

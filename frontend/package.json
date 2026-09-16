@@ -3,13 +3,17 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
+        "protocol:build": "pnpm exec tsc -p ../packages/protocol/tsconfig.json",
+        "predev": "pnpm run protocol:build",
         "dev": "next dev --turbopack --hostname 0.0.0.0",
+        "prebuild": "pnpm run protocol:build",
         "build": "next build",
         "start": "next start",
         "lint": "eslint",
         "generate:headswithfile": "node ./scripts/generate-headswithfile.mjs"
     },
     "dependencies": {
+        "@openao/protocol": "link:../packages/protocol",
         "dotenv": "^17.4.2",
         "howler": "^2.2.4",
         "lucide-react": "^1.16.0",
