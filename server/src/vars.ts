@@ -25,6 +25,7 @@ function Vars(this: any) {
         balance: 0,
         craftingRecipes: 0,
         smeltingRecipes: 0,
+        maps: 0,
     };
     this.clients = {};
     this.parties = {};

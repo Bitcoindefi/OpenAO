@@ -522,7 +522,7 @@ CREATE TABLE IF NOT EXISTS game_data_revisions (
 ALTER TABLE game_data_revisions DROP CONSTRAINT IF EXISTS game_data_revisions_kind_check;
 ALTER TABLE game_data_revisions
     ADD CONSTRAINT game_data_revisions_kind_check
-    CHECK (kind IN ('objs', 'npcs', 'crafting_recipes', 'smelting_recipes', 'balance'));
+    CHECK (kind IN ('objs', 'npcs', 'crafting_recipes', 'smelting_recipes', 'balance', 'maps'));
 
 CREATE INDEX IF NOT EXISTS idx_accounts_email ON accounts(email);
 CREATE INDEX IF NOT EXISTS idx_characters_account_id ON characters(account_id);
@@ -559,6 +559,23 @@ CREATE INDEX IF NOT EXISTS idx_game_smelting_recipes_updated_at ON game_smelting
 CREATE INDEX IF NOT EXISTS idx_game_smelting_recipes_mineral_item_id ON game_smelting_recipes(mineral_item_id);
 CREATE INDEX IF NOT EXISTS idx_game_balance_updated_at ON game_balance(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_game_data_revisions_kind_id ON game_data_revisions(kind, id DESC);
+
+-- Canonical map snapshots.
+--
+-- One JSONB document per map instead of 2.9 million tile rows. The source
+-- files stay untouched and remain a fallback while the import is partial.
+CREATE TABLE IF NOT EXISTS game_maps (
+    id INTEGER PRIMARY KEY CHECK (id > 0),
+    name TEXT NOT NULL,
+    data JSONB NOT NULL,
+    checksum TEXT NOT NULL,
+    version BIGINT NOT NULL DEFAULT 0,
+    updated_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_maps_updated_at ON game_maps(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_challenge_history_finished_at ON challenge_history(finished_at DESC);
 
 -- ═══════════════════════════════════════════════════════════════════════════
