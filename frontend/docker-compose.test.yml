@@ -3,7 +3,8 @@ name: aoweb-frontend-test
 services:
   frontend:
     build:
-      context: .
+      context: ../
+      dockerfile: frontend/Dockerfile
       extra_hosts:
         - "host.docker.internal:host-gateway"
       args:

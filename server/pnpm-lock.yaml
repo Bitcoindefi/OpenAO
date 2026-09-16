@@ -8,12 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@openao/protocol':
+        specifier: link:../packages/protocol
+        version: link:../packages/protocol
       axios:
         specifier: ^1.16.1
         version: 1.16.1
-      bytebuffer:
-        specifier: ^5.0.1
-        version: 5.0.1
       https:
         specifier: ^1.0.0
         version: 1.0.0
@@ -374,10 +374,6 @@ packages:
     resolution: {integrity: sha512-kLpxurY4Z4r9sgMsyG0Z9uzsBlgiU/EFKhj/h91/8yHu0edo7XuixOIH3VcJ8kkxs6/jPzoI6U9Vj3WqbMQ94g==}
     engines: {node: 18 || 20 || >=22}
 
-  bytebuffer@5.0.1:
-    resolution: {integrity: sha512-IuzSdmADppkZ6DlpycMkm8l9zeEq16fWtLvunEwFiYciR/BHo4E8/xs5piFquG+Za8OWmMqHF8zuRviz2LHvRQ==}
-    engines: {node: '>=0.8'}
-
   call-bind-apply-helpers@1.0.2:
     resolution: {integrity: sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==}
     engines: {node: '>= 0.4'}
@@ -615,10 +611,6 @@ packages:
 
   lodash@4.18.1:
     resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
-
-  long@3.2.0:
-    resolution: {integrity: sha512-ZYvPPOMqUwPoDsbJaR10iQJYnMuZhRTvHYl62ErLIEX7RgFlziSBUUvrt3OVfc47QlHHpzPZYP17g3Fv7oeJkg==}
-    engines: {node: '>=0.6'}
 
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
@@ -1028,10 +1020,6 @@ snapshots:
     dependencies:
       balanced-match: 4.0.4
 
-  bytebuffer@5.0.1:
-    dependencies:
-      long: 3.2.0
-
   call-bind-apply-helpers@1.0.2:
     dependencies:
       es-errors: 1.3.0
@@ -1291,8 +1279,6 @@ snapshots:
       p-locate: 5.0.0
 
   lodash@4.18.1: {}
-
-  long@3.2.0: {}
 
   math-intrinsics@1.1.0: {}
 
