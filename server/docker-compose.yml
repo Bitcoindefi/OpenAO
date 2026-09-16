@@ -1,7 +1,8 @@
 services:
     server:
         build:
-            context: .
+            context: ../
+            dockerfile: server/Dockerfile
         restart: unless-stopped
         volumes:
             - ./jsons/npcsInMap.json:/app/jsons/npcsInMap.json

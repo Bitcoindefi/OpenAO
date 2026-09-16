@@ -485,6 +485,7 @@ export type RuntimeClient = {
     lastPacketIntervalMs?: number;
     minPacketIntervalMs?: number;
     lastActivityAt?: number;
+    lastPingAt?: number;
     packetTypeCounts?: Record<string, number>;
     nextMapClickAt?: number;
     nextDoorToggleAt?: number;
@@ -501,7 +502,7 @@ export type RuntimeClient = {
     readyState: number;
     on: (event: string, listener: (...args: unknown[]) => void) => void;
     send: (data: unknown) => void;
-    close: () => void;
+    close: (code?: number, reason?: string | Buffer) => void;
     _socket?: {
         remoteAddress?: string;
     };

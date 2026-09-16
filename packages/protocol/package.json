@@ -1,0 +1,32 @@
+{
+    "name": "@openao/protocol",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Shared binary protocol contract for the OpenAO client and server",
+    "main": "dist/index.js",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "types": "./src/index.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist",
+        "src"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "test": "vitest run",
+        "typecheck": "tsc -p tsconfig.json --noEmit"
+    },
+    "devDependencies": {
+        "@types/node": "^25.8.0",
+        "typescript": "^6.0.3",
+        "vitest": "^3.2.7"
+    },
+    "engines": {
+        "node": ">=24"
+    },
+    "license": "ISC"
+}
