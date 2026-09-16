@@ -617,7 +617,7 @@ export async function clearTile(
  * specials.json, npcs.json, meta.json) y la API los re-exporta para el
  * frontend. Si la copia fuente no existe, el mapa no es editable.
  */
-function resolveMapsSourceDir(): string {
+export function resolveMapsSourceDir(): string {
     const candidates = [
         path.resolve(__dirname, ".."),
         path.resolve(__dirname, "..", "..", "src"),

@@ -535,3 +535,11 @@ export async function exportFrontendNpcs(): Promise<
         ]),
     );
 }
+
+export async function isValidGameNpcIndex(id: number): Promise<boolean> {
+    if (!Number.isInteger(id) || id <= 0) {
+        return false;
+    }
+    const npc = await getGameNpcById(id);
+    return npc !== null;
+}
