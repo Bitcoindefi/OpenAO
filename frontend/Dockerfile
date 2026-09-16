@@ -5,6 +5,17 @@ ENV PATH="$PNPM_HOME:$PATH"
 
 RUN corepack enable
 
+FROM base AS maps
+WORKDIR /app/server
+
+COPY packages/protocol /app/packages/protocol
+COPY server/package.json server/pnpm-lock.yaml server/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY server/src/mapNpcStorage.ts ./src/mapNpcStorage.ts
+COPY server/src/scripts/exportFrontendOptimizedMaps.ts ./src/scripts/exportFrontendOptimizedMaps.ts
+COPY server/mapas_source ./mapas_source
+RUN pnpm export-frontend-maps
+
 FROM base AS deps
 WORKDIR /app/frontend
 
@@ -44,6 +55,8 @@ ENV GAME_DATA_ADMIN_PROXY_TOKEN=$GAME_DATA_ADMIN_PROXY_TOKEN
 
 COPY packages/protocol /app/packages/protocol
 COPY frontend .
+COPY --from=maps /app/server/mapas_source /app/server/mapas_source
+COPY --from=maps /app/frontend/public/maps_optimized ./public/maps_optimized
 RUN pnpm build
 
 FROM base AS runtime

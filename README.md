@@ -165,6 +165,30 @@ pnpm dev
 
 Abrir `http://localhost:3000`.
 
+### Mapas del frontend y builds
+
+Los mapas optimizados no están versionados. Antes de levantar el frontend o
+ejecutar un build local, generarlos desde la raíz del repositorio:
+
+```bash
+pnpm --dir server install --frozen-lockfile
+pnpm --dir server export-frontend-maps
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend build
+```
+
+`pnpm --dir frontend build` verifica que cada mapa de `server/mapas_source/`
+tenga su archivo en `frontend/public/maps_optimized/`. Si falta alguno o está
+vacío, el build termina con un error y el comando para regenerarlo. Después de
+editar los mapas fuente, volver a ejecutar `export-frontend-maps`.
+
+El Dockerfile genera los mapas automáticamente antes de compilar Next.js;
+no hace falta generarlos en el host. Usar la raíz del repositorio como contexto:
+
+```bash
+docker build -f frontend/Dockerfile -t openao-frontend .
+```
+
 ## Arquitectura
 
 | Componente | Carpeta | Puerto |
