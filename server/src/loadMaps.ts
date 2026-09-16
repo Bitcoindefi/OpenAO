@@ -2,7 +2,9 @@ export {};
 const vars = require("./vars");
 const fs = require("fs");
 const path = require("path");
+const funct = require("./functions");
 const loadNpcs = require("./loadNpcs");
+const { initializeMapOverridesFromApi } = require("./mapOverrideSync");
 
 type MapMetadata = {
     id?: number;
@@ -172,6 +174,20 @@ class LoadMaps {
         }
 
         await Promise.all(arMapsToLoad);
+
+        const mapNumbers = Object.keys(vars.mapa)
+            .map(Number)
+            .filter(Number.isInteger)
+            .sort((left: number, right: number) => left - right);
+        const overrideResult = await initializeMapOverridesFromApi(
+            vars,
+            mapNumbers,
+            (mapApiPath: string) => funct.fetchUrl(mapApiPath),
+        );
+        console.log(
+            `[GAME DATA] Map overrides aplicados: ${overrideResult.tileOverrides} tiles y ` +
+                `${overrideResult.entities} entidades en ${overrideResult.mapNumbers} mapas.`,
+        );
 
         console.log("Mapas Cargados.");
 
