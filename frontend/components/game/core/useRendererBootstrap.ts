@@ -143,6 +143,129 @@ type UseRendererBootstrapOptions = {
     setInspectedNpc: (value: any) => void;
 };
 
+const CLIENT_RENDER_FPS_CAP = 60;
+const DEFERRED_RENDER_CHUNK_ROWS = 10;
+const LOW_END_UPPER_LAYER_RADIUS_TILES = 12;
+const LOW_END_DEVICE_MEMORY_GB = 4;
+const LOW_END_CPU_CORES = 4;
+
+type TileRenderBounds = {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+};
+
+type RenderMapOptions = NonNullable<
+    Parameters<UseRendererBootstrapOptions["renderMap"]>[1]
+>;
+
+function getRendererResolution(): number {
+    return Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+}
+
+function getFullMapBounds(mapDimensions: {
+    width: number;
+    height: number;
+}): TileRenderBounds {
+    return {
+        minX: 1,
+        maxX: mapDimensions.width,
+        minY: 1,
+        maxY: mapDimensions.height,
+    };
+}
+
+function expandTileBounds(
+    bounds: TileRenderBounds,
+    mapDimensions: { width: number; height: number },
+    radius: number,
+): TileRenderBounds {
+    return {
+        minX: Math.max(1, bounds.minX - radius),
+        maxX: Math.min(mapDimensions.width, bounds.maxX + radius),
+        minY: Math.max(1, bounds.minY - radius),
+        maxY: Math.min(mapDimensions.height, bounds.maxY + radius),
+    };
+}
+
+function isLowEndClient(): boolean {
+    if (typeof navigator === "undefined") {
+        return false;
+    }
+
+    const clientNavigator = navigator as Navigator & {
+        deviceMemory?: number;
+        hardwareConcurrency?: number;
+    };
+
+    return (
+        (clientNavigator.deviceMemory !== undefined &&
+            clientNavigator.deviceMemory <= LOW_END_DEVICE_MEMORY_GB) ||
+        (clientNavigator.hardwareConcurrency !== undefined &&
+            clientNavigator.hardwareConcurrency <= LOW_END_CPU_CORES)
+    );
+}
+
+function waitForIdle(timeout = 160): Promise<void> {
+    return new Promise((resolve) => {
+        const requestIdle =
+            (
+                window as Window & {
+                    requestIdleCallback?: (
+                        callback: () => void,
+                        options?: { timeout: number },
+                    ) => number;
+                }
+            ).requestIdleCallback ?? null;
+
+        if (requestIdle) {
+            requestIdle(() => resolve(), { timeout });
+            return;
+        }
+
+        window.setTimeout(resolve, 0);
+    });
+}
+
+async function renderMapInIdleRowChunks(
+    engine: Engine,
+    renderMap: UseRendererBootstrapOptions["renderMap"],
+    options: RenderMapOptions,
+): Promise<void> {
+    const renderBounds =
+        options.bounds ?? getFullMapBounds(engine.mapDimensions);
+
+    for (
+        let minY = renderBounds.minY;
+        minY <= renderBounds.maxY;
+        minY += DEFERRED_RENDER_CHUNK_ROWS
+    ) {
+        if (engine.isDestroyed) {
+            return;
+        }
+
+        await waitForIdle();
+
+        if (engine.isDestroyed) {
+            return;
+        }
+
+        await renderMap(engine, {
+            ...options,
+            bounds: {
+                minX: renderBounds.minX,
+                maxX: renderBounds.maxX,
+                minY,
+                maxY: Math.min(
+                    renderBounds.maxY,
+                    minY + DEFERRED_RENDER_CHUNK_ROWS - 1,
+                ),
+            },
+        });
+    }
+}
+
 export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
     useEffect(() => {
         if (!options.isMounted || !options.canvasRef.current) return;
@@ -336,6 +459,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     );
 
                     const app = new Application();
+                    const rendererResolution = getRendererResolution();
 
                     try {
                         await app.init({
@@ -343,12 +467,10 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                             height: options.screenSize.height,
                             backgroundColor: 0x000000,
                             antialias: false,
-                            resolution: Math.min(
-                                window.devicePixelRatio || 1,
-                                2,
-                            ),
+                            resolution: rendererResolution,
                             autoDensity: true,
                         });
+                        app.ticker.maxFPS = CLIENT_RENDER_FPS_CAP;
                         return app;
                     } catch (error) {
                         app.destroy({ removeView: true }, { children: true });
@@ -770,6 +892,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                 app.ticker.add(dialogBubbleTicker);
                 engine.dialogBubbleTicker = dialogBubbleTicker;
 
+                const hudTextResolution = getRendererResolution();
                 const fpsStyle = new TextStyle({
                     fontFamily: "Arial",
                     fontSize: 11,
@@ -780,7 +903,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: options.fpsDisplayTextRef.current,
                     style: fpsStyle,
                 });
-                fpsText.resolution = 1;
+                fpsText.resolution = hudTextResolution;
                 fpsText.x = 10;
                 fpsText.y = 8;
                 fpsText.zIndex = 1000;
@@ -790,7 +913,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: options.pingDisplayTextRef.current,
                     style: fpsStyle,
                 });
-                pingText.resolution = 1;
+                pingText.resolution = hudTextResolution;
                 pingText.x = 10;
                 pingText.y = 22;
                 pingText.zIndex = 1000;
@@ -800,7 +923,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: "",
                     style: getHudStatusTextStyle(0xff3b30),
                 });
-                seguroText.resolution = 1;
+                seguroText.resolution = hudTextResolution;
                 seguroText.x = 10;
                 seguroText.y = 36;
                 seguroText.zIndex = 1000;
@@ -810,7 +933,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                     text: "",
                     style: getHudStatusTextStyle(0xff3b30),
                 });
-                clanSeguroText.resolution = 1;
+                clanSeguroText.resolution = hudTextResolution;
                 clanSeguroText.x = 10;
                 clanSeguroText.y = 50;
                 clanSeguroText.zIndex = 1000;
@@ -825,7 +948,7 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                         stroke: { color: 0x000000, width: 1.5 },
                     }),
                 });
-                debugCombatText.resolution = 1;
+                debugCombatText.resolution = hudTextResolution;
                 debugCombatText.x = 10;
                 debugCombatText.y = 50;
                 debugCombatText.zIndex = 1000;
@@ -911,36 +1034,54 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                             "Completando resto del mapa actual...",
                         );
 
-                        options
-                            .renderMap(engine, {
-                                includeLayers: ["1", "2"],
-                                includeObjects: false,
-                                excludeBounds:
-                                    initialVisibleBounds ?? undefined,
-                            })
-                            .then(() =>
-                                options.renderMap(engine, {
-                                    includeLayers: ["3", "4"],
-                                    includeObjects: true,
-                                    excludeBounds:
-                                        initialVisibleBounds ?? undefined,
-                                }),
-                            )
-                            .then(() =>
-                                options.warmCommonCharacterAssets(engine),
-                            )
-                            .then(() => options.prefetchNearbyMaps(engine))
-                            .catch((error) => {
+                        const lowEndClient = isLowEndClient();
+                        const upperLayerBounds =
+                            lowEndClient && initialVisibleBounds
+                                ? expandTileBounds(
+                                      initialVisibleBounds,
+                                      engine.mapDimensions,
+                                      LOW_END_UPPER_LAYER_RADIUS_TILES,
+                                  )
+                                : undefined;
+
+                        void (async () => {
+                            try {
+                                await renderMapInIdleRowChunks(
+                                    engine,
+                                    options.renderMap,
+                                    {
+                                        includeLayers: ["1", "2"],
+                                        includeObjects: false,
+                                        excludeBounds:
+                                            initialVisibleBounds ?? undefined,
+                                    },
+                                );
+
+                                await renderMapInIdleRowChunks(
+                                    engine,
+                                    options.renderMap,
+                                    {
+                                        includeLayers: ["3", "4"],
+                                        includeObjects: true,
+                                        bounds: upperLayerBounds,
+                                        excludeBounds:
+                                            initialVisibleBounds ?? undefined,
+                                    },
+                                );
+
+                                await options.warmCommonCharacterAssets(engine);
+                                await options.prefetchNearbyMaps(engine);
+                            } catch (error) {
                                 console.warn(
                                     "Failed to finish deferred scene enhancement:",
                                     error,
                                 );
-                            })
-                            .finally(() => {
+                            } finally {
                                 if (!engine.isDestroyed) {
                                     options.clearLoadingProgress();
                                 }
-                            });
+                            }
+                        })();
                     }
                 }, 0);
             } catch (err) {

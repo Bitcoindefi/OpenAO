@@ -14,6 +14,14 @@ import {
 } from "../assets/scenePreload";
 import type { Engine } from "../engine/Engine";
 
+const MAX_NEARBY_MAP_PREFETCHES = 2;
+const SLOW_EFFECTIVE_CONNECTION_TYPES = new Set(["slow-2g", "2g"]);
+
+type NetworkInformationLike = {
+    effectiveType?: string;
+    saveData?: boolean;
+};
+
 type LoadingStage =
     | "Preparando cliente"
     | "Cargando escena inicial"
@@ -30,6 +38,45 @@ type UseAssetPipelineOptions = {
         detail: string,
     ) => void;
 };
+
+function getBrowserConnection(): NetworkInformationLike | null {
+    if (typeof navigator === "undefined") {
+        return null;
+    }
+
+    return (
+        (
+            navigator as Navigator & {
+                connection?: NetworkInformationLike;
+                mozConnection?: NetworkInformationLike;
+                webkitConnection?: NetworkInformationLike;
+            }
+        ).connection ??
+        (navigator as Navigator & { mozConnection?: NetworkInformationLike })
+            .mozConnection ??
+        (
+            navigator as Navigator & {
+                webkitConnection?: NetworkInformationLike;
+            }
+        ).webkitConnection ??
+        null
+    );
+}
+
+function shouldSkipNearbyMapPrefetch(): boolean {
+    const connection = getBrowserConnection();
+    if (!connection) {
+        return false;
+    }
+
+    if (connection.saveData) {
+        return true;
+    }
+
+    return SLOW_EFFECTIVE_CONNECTION_TYPES.has(
+        connection.effectiveType?.toLowerCase() ?? "",
+    );
+}
 
 export function useAssetPipeline({
     getGraphicImagePaths,
@@ -490,18 +537,29 @@ export function useAssetPipeline({
                 return;
             }
 
+            if (shouldSkipNearbyMapPrefetch()) {
+                updateLoadingProgress(
+                    "Precargando alrededores",
+                    88,
+                    "Prefetch omitido por modo de ahorro de datos o conexion lenta.",
+                );
+                return;
+            }
+
+            const targetMaps = nearbyMaps.slice(0, MAX_NEARBY_MAP_PREFETCHES);
+
             updateLoadingProgress(
                 "Precargando alrededores",
                 88,
-                `Analizando ${nearbyMaps.length} mapas cercanos...`,
+                `Analizando ${targetMaps.length} de ${nearbyMaps.length} mapas cercanos...`,
             );
 
-            for (let index = 0; index < nearbyMaps.length; index++) {
+            for (let index = 0; index < targetMaps.length; index++) {
                 if (engine.isDestroyed) {
                     return;
                 }
 
-                const targetMap = nearbyMaps[index];
+                const targetMap = targetMaps[index];
                 try {
                     const nextMapData = await loadMapData(targetMap);
                     const nextMapDimensions = getMapDimensions(
@@ -523,7 +581,7 @@ export function useAssetPipeline({
                     );
                     updateLoadingProgress(
                         "Precargando alrededores",
-                        88 + Math.round(((index + 1) / nearbyMaps.length) * 12),
+                        88 + Math.round(((index + 1) / targetMaps.length) * 12),
                         `Mapa ${targetMap} listo para transicion rapida.`,
                     );
                 } catch (error) {
