@@ -652,3 +652,35 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--  OpenAO #12: auditable map revisions (deltas + periodic snapshots)
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Differentiates from full before/after snapshot-per-op approaches by storing
+-- compact tile deltas and a full snapshot every N revisions for fast rebuild.
+
+CREATE TABLE IF NOT EXISTS game_map_revisions (
+    id BIGSERIAL PRIMARY KEY,
+    map_num INTEGER NOT NULL CHECK (map_num > 0),
+    rev_num INTEGER NOT NULL CHECK (rev_num > 0),
+    operation TEXT NOT NULL CHECK (operation IN (
+        'paint', 'clear', 'publish', 'discard', 'revert', 'undo', 'redo', 'rollback', 'entity'
+    )),
+    author_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    record_kind TEXT NOT NULL CHECK (record_kind IN ('delta', 'snapshot')),
+    delta JSONB NOT NULL DEFAULT '[]'::jsonb,
+    snapshot JSONB,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (map_num, rev_num)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_revisions_map_id
+    ON game_map_revisions(map_num, id DESC);
+
+CREATE TABLE IF NOT EXISTS game_map_revision_heads (
+    map_num INTEGER PRIMARY KEY CHECK (map_num > 0),
+    current_rev_num INTEGER,
+    redo_rev_num INTEGER,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -124,6 +124,14 @@ import {
 } from "./repositories/worldBuilder";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
+    listMapRevisions,
+    getMapRevision,
+    diffMapRevisions,
+    undoMap,
+    redoMap,
+    rollbackMap,
+} from "./repositories/gameMapRevisions";
+import {
     getGameCraftingRecipeById,
     listGameCraftingRecipeChangesSince,
     deleteGameCraftingRecipe,
@@ -915,7 +923,7 @@ app.delete(
                 return;
             }
 
-            response.json({ removed: await clearTile(mapNum, x, y, layer) });
+            response.json(await clearTile(mapNum, x, y, layer, authorized.session.account._id));
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
@@ -1058,7 +1066,7 @@ app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
             return;
         }
 
-        response.json(await discardDrafts(mapNum));
+        response.json(await discardDrafts(mapNum, authorized.session.account._id));
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1082,7 +1090,7 @@ app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
             return;
         }
 
-        response.json(await revertMap(mapNum));
+        response.json(await revertMap(mapNum, authorized.session.account._id));
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1115,6 +1123,139 @@ app.get("/admin/game-data/maps/:mapNum/status", async (request, response) => {
  * Paleta de tiles disponibles para el mapa actual: las entradas de la paleta
  * fuente (terrain.json) mas los graficos subidos por administradores.
  */
+
+/** Lista el historial auditable de un mapa (deltas + snapshots periodicos). */
+app.get("/admin/game-data/maps/:mapNum/revisions", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        const limit = Number.parseInt(String(request.query.limit ?? "50"), 10);
+        response.json({
+            mapNum,
+            revisions: await listMapRevisions(mapNum, Number.isFinite(limit) ? limit : 50),
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.get("/admin/game-data/maps/:mapNum/revisions/diff", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const fromRevisionId = Number.parseInt(String(request.query.from ?? ""), 10);
+        const toRevisionId = Number.parseInt(String(request.query.to ?? ""), 10);
+        if (
+            !Number.isInteger(mapNum) ||
+            mapNum <= 0 ||
+            !Number.isInteger(fromRevisionId) ||
+            !Number.isInteger(toRevisionId)
+        ) {
+            response.status(400).json({ error: "Parametros invalidos. Usa ?from=&to=" });
+            return;
+        }
+
+        response.json({
+            mapNum,
+            fromRevisionId,
+            toRevisionId,
+            diff: await diffMapRevisions(mapNum, fromRevisionId, toRevisionId),
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.get("/admin/game-data/maps/:mapNum/revisions/:revisionId", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const revisionId = Number.parseInt(request.params.revisionId ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0 || !Number.isInteger(revisionId) || revisionId <= 0) {
+            response.status(400).json({ error: "Parametros invalidos." });
+            return;
+        }
+
+        const revision = await getMapRevision(mapNum, revisionId);
+        if (!revision) {
+            response.status(404).json({ error: "Revision no encontrada." });
+            return;
+        }
+        response.json(revision);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.post("/admin/game-data/maps/:mapNum/undo", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json(await undoMap(mapNum, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.post("/admin/game-data/maps/:mapNum/redo", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json(await redoMap(mapNum, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.post("/admin/game-data/maps/:mapNum/rollback/:revisionId", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const revisionId = Number.parseInt(request.params.revisionId ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0 || !Number.isInteger(revisionId) || revisionId <= 0) {
+            response.status(400).json({ error: "Parametros invalidos." });
+            return;
+        }
+
+        response.json(await rollbackMap(mapNum, revisionId, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
 app.get(
     "/admin/game-data/maps/:mapNum/terrain",
     async (request, response) => {
