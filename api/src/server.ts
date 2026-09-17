@@ -106,19 +106,31 @@ import {
 } from "./repositories/gameBalance";
 import {
     clearTile,
+    doorStateSchema,
     discardDrafts,
     getGraphicContent,
     getMapStatus,
     getMapTerrainPalette,
     listGraphics,
+    listMapDoors,
+    listMapObjects,
     listMapOverrides,
     listMapTileEntities,
+    mapObjectSchema,
+    moveMapObject,
+    moveMapObjectSchema,
     paintTiles,
     paintTilesSchema,
+    placeMapObject,
+    placeStructure,
     placeTileEntity,
     publishMap,
+    removeDoor,
+    removeMapObject,
     removeTileEntity,
     revertMap,
+    setDoorState,
+    structurePlacementSchema,
     tileEntitySchema,
     uploadGraphic,
 } from "./repositories/worldBuilder";
@@ -953,11 +965,20 @@ app.get("/maps/:mapNum/overrides", async (request, response) => {
             // Sin sesion valida se sirve lo publicado, que es el caso normal.
         }
 
+        const [overrides, entities, objects, doors] = await Promise.all([
+            listMapOverrides(mapNum, includeDrafts),
+            listMapTileEntities(mapNum, includeDrafts),
+            listMapObjects(mapNum, includeDrafts),
+            listMapDoors(mapNum, includeDrafts),
+        ]);
+
         response.json({
             mapNum,
             includeDrafts,
-            overrides: await listMapOverrides(mapNum, includeDrafts),
-            entities: await listMapTileEntities(mapNum, includeDrafts),
+            overrides,
+            entities,
+            objects,
+            doors,
         });
     } catch (error) {
         const message =
@@ -990,11 +1011,20 @@ app.get(
                 return;
             }
 
+            const [overrides, entities, objects, doors] = await Promise.all([
+                listMapOverrides(mapNum, true),
+                listMapTileEntities(mapNum, true),
+                listMapObjects(mapNum, true),
+                listMapDoors(mapNum, true),
+            ]);
+
             response.json({
                 mapNum,
                 includeDrafts: true,
-                overrides: await listMapOverrides(mapNum, true),
-                entities: await listMapTileEntities(mapNum, true),
+                overrides,
+                entities,
+                objects,
+                doors,
             });
         } catch (error) {
             const message =
@@ -1214,6 +1244,234 @@ app.delete(
             response.json({
                 removed: await removeTileEntity(mapNum, x, y, kind),
             });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Coloca o actualiza un objeto con cantidad en un tile, como borrador. */
+app.put(
+    "/admin/game-data/maps/:mapNum/objects",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const parsed = mapObjectSchema.safeParse({
+                ...(request.body as Record<string, unknown>),
+                mapNum,
+            });
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            response.json(
+                await placeMapObject(
+                    parsed.data,
+                    authorized.session.account._id,
+                ),
+            );
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Quita un objeto, incluso si ya fue publicado; el cambio es inmediato. */
+app.delete(
+    "/admin/game-data/maps/:mapNum/objects/:x/:y",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const parsed = mapObjectSchema
+                .pick({ mapNum: true, x: true, y: true })
+                .safeParse(request.params);
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            response.json(
+                await removeMapObject(
+                    parsed.data.mapNum,
+                    parsed.data.x,
+                    parsed.data.y,
+                ),
+            );
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Mueve borrador y publicado atomicamente; el cambio visible es inmediato. */
+app.put(
+    "/admin/game-data/maps/:mapNum/objects/:x/:y/move",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const parsed = moveMapObjectSchema.safeParse({
+                ...(request.body as Record<string, unknown>),
+                mapNum: request.params.mapNum,
+                fromX: request.params.x,
+                fromY: request.params.y,
+            });
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            response.json(
+                await moveMapObject(
+                    parsed.data,
+                    authorized.session.account._id,
+                ),
+            );
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Coloca una estructura multi-tile completa dentro de una unica transaccion. */
+app.put(
+    "/admin/game-data/maps/:mapNum/structures",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+            const parsed = structurePlacementSchema.safeParse({
+                ...(request.body as Record<string, unknown>),
+                mapNum,
+            });
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            response.json(
+                await placeStructure(
+                    parsed.data,
+                    authorized.session.account._id,
+                ),
+            );
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Crea o cambia el estado de una puerta y su bloqueo de movimiento. */
+app.put(
+    "/admin/game-data/maps/:mapNum/doors/:x/:y",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const parsed = doorStateSchema.safeParse({
+                ...(request.body as Record<string, unknown>),
+                mapNum: request.params.mapNum,
+                x: request.params.x,
+                y: request.params.y,
+            });
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            response.json(
+                await setDoorState(
+                    parsed.data,
+                    authorized.session.account._id,
+                ),
+            );
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/** Quita una puerta, incluso si ya fue publicada; el cambio es inmediato. */
+app.delete(
+    "/admin/game-data/maps/:mapNum/doors/:x/:y",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const parsed = mapObjectSchema
+                .pick({ mapNum: true, x: true, y: true })
+                .safeParse(request.params);
+
+            if (!parsed.success) {
+                response
+                    .status(400)
+                    .json({ error: JSON.stringify(parsed.error.issues) });
+                return;
+            }
+
+            response.json(
+                await removeDoor(
+                    parsed.data.mapNum,
+                    parsed.data.x,
+                    parsed.data.y,
+                ),
+            );
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
