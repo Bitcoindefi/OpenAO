@@ -39,11 +39,22 @@ export type MapSpecialsData = {
     [key: string]: unknown;
 };
 
-export type TileBlockCheckFn = (
+export type TileBlockCheckFn =
+    | ((mapNum: number, x: number, y: number) => boolean)
+    | ((x: number, y: number) => boolean);
+
+export function callTileBlockCheck(
+    fn: TileBlockCheckFn | undefined,
     mapNum: number,
     x: number,
     y: number,
-) => boolean;
+): boolean {
+    if (!fn) return false;
+    if (fn.length === 2) {
+        return (fn as (x: number, y: number) => boolean)(x, y);
+    }
+    return (fn as (mapNum: number, x: number, y: number) => boolean)(mapNum, x, y);
+}
 
 export interface BFSValidationOptions {
     isTileBlocked?: TileBlockCheckFn;
@@ -165,6 +176,9 @@ export function normalizeExitEntry(value: unknown): MapExitEntry | null {
  * Obtiene la lista de todos los destinos en una entrada de salida.
  */
 export function extractExitTargets(entry: MapExitEntry): MapExitTarget[] {
+    if (!entry || typeof entry !== "object") {
+        return [];
+    }
     if ("destinations" in entry && Array.isArray(entry.destinations)) {
         return entry.destinations;
     }
@@ -183,32 +197,71 @@ export function checkExitConnectivityBFS(
     target: MapExitTarget,
     options: BFSValidationOptions = {},
 ): BFSValidationResult {
-    const isTileBlocked = options.isTileBlocked ?? (() => false);
+    if (!target || typeof target !== "object") {
+        return {
+            ok: false,
+            reason: "Destino de salida inválido o nulo.",
+        };
+    }
+
     const minAccessibleNeighbors =
         options.minAccessibleNeighbors ?? MIN_ACCESSIBLE_NEIGHBORS_DEFAULT;
     const minConnectedTiles =
         options.minConnectedTiles ?? MIN_CONNECTED_TILES_DEFAULT;
-    const maxNodes = options.maxNodesToExplore ?? MAX_BFS_EXPLORATION_DEFAULT;
+    const maxNodes =
+        options.maxNodesToExplore ??
+        (options.targetCoords
+            ? MAP_GRID_SIZE * MAP_GRID_SIZE
+            : MAX_BFS_EXPLORATION_DEFAULT);
 
-    // 1. Validar límites de mapa
+    // 1. Validar límites de mapa y enteros válidos
     if (
+        !Number.isInteger(target.map) ||
+        target.map <= 0 ||
+        !Number.isInteger(target.x) ||
         target.x < 1 ||
         target.x > MAP_GRID_SIZE ||
+        !Number.isInteger(target.y) ||
         target.y < 1 ||
         target.y > MAP_GRID_SIZE
     ) {
         return {
             ok: false,
-            reason: `Coordenada destino (${target.x}, ${target.y}) fuera de límites de grilla (1-${MAP_GRID_SIZE}).`,
+            reason: `Coordenada destino (${target?.x}, ${target?.y}) o mapa (${target?.map}) fuera de límites de grilla (1-${MAP_GRID_SIZE}).`,
         };
     }
 
     // 2. Validar que el propio destino no esté bloqueado
-    if (isTileBlocked(target.map, target.x, target.y)) {
+    if (callTileBlockCheck(options.isTileBlocked, target.map, target.x, target.y)) {
         return {
             ok: false,
             reason: `El tile de destino (${target.x}, ${target.y}) en mapa ${target.map} está bloqueado.`,
         };
+    }
+
+    // 2b. Validar coordenadas objetivo si fueron provistas
+    if (options.targetCoords) {
+        const tx = options.targetCoords.x;
+        const ty = options.targetCoords.y;
+        if (
+            !Number.isInteger(tx) ||
+            !Number.isInteger(ty) ||
+            tx < 1 ||
+            tx > MAP_GRID_SIZE ||
+            ty < 1 ||
+            ty > MAP_GRID_SIZE
+        ) {
+            return {
+                ok: false,
+                reason: `Coordenada objetivo (${tx}, ${ty}) fuera de límites de grilla (1-${MAP_GRID_SIZE}).`,
+            };
+        }
+        if (callTileBlockCheck(options.isTileBlocked, target.map, tx, ty)) {
+            return {
+                ok: false,
+                reason: `Coordenada objetivo (${tx}, ${ty}) en mapa ${target.map} está bloqueada.`,
+            };
+        }
     }
 
     // 3. BFS para conectividad en la grilla
@@ -218,6 +271,7 @@ export function checkExitConnectivityBFS(
 
     let reachableCount = 1;
     let immediateAccessibleNeighbors = 0;
+    let maxPhysicalNeighbors = 0;
 
     const directions = [
         { dx: 0, dy: -1 }, // Arriba (Norte)
@@ -232,13 +286,15 @@ export function checkExitConnectivityBFS(
         const ny = target.y + dir.dy;
 
         if (nx >= 1 && nx <= MAP_GRID_SIZE && ny >= 1 && ny <= MAP_GRID_SIZE) {
-            if (!isTileBlocked(target.map, nx, ny)) {
+            maxPhysicalNeighbors++;
+            if (!callTileBlockCheck(options.isTileBlocked, target.map, nx, ny)) {
                 immediateAccessibleNeighbors++;
             }
         }
     }
 
-    if (immediateAccessibleNeighbors < minAccessibleNeighbors) {
+    const requiredNeighbors = Math.min(minAccessibleNeighbors, maxPhysicalNeighbors);
+    if (immediateAccessibleNeighbors < requiredNeighbors) {
         return {
             ok: false,
             reason: `El tile de destino (${target.x}, ${target.y}) en mapa ${target.map} no posee coordenadas vecinas transitables (atrapado sin salida).`,
@@ -252,6 +308,10 @@ export function checkExitConnectivityBFS(
         : true;
 
     while (queue.length > 0 && reachableCount < maxNodes) {
+        if (targetCoordsReached && reachableCount >= minConnectedTiles) {
+            break;
+        }
+
         const current = queue.shift()!;
 
         for (const dir of directions) {
@@ -268,7 +328,7 @@ export function checkExitConnectivityBFS(
             ) {
                 visited.add(key);
 
-                if (!isTileBlocked(target.map, nx, ny)) {
+                if (!callTileBlockCheck(options.isTileBlocked, target.map, nx, ny)) {
                     reachableCount++;
                     queue.push({ x: nx, y: ny });
 
@@ -317,6 +377,13 @@ export function validateExitEntryBFS(
     options: BFSValidationOptions = {},
 ): BFSValidationResult {
     const targets = extractExitTargets(entry);
+
+    if (targets.length === 0) {
+        return {
+            ok: false,
+            reason: "La salida no contiene destinos válidos configurados.",
+        };
+    }
 
     for (const target of targets) {
         const result = checkExitConnectivityBFS(target, options);
@@ -382,6 +449,8 @@ export async function atomicWriteJsonFile(
             } catch {
                 // Preservar backup si la restauración falla catastróficamente
             }
+        } else if (!originalExists && existsSync(filePath)) {
+            await fs.unlink(filePath).catch(() => {});
         }
 
         throw new Error(
@@ -411,10 +480,16 @@ export async function withAtomicRollback<T>(
     let currentContent: any = null;
     if (originalExists) {
         await fs.copyFile(filePath, backupPath);
+        const raw = await fs.readFile(filePath, "utf8");
         try {
-            currentContent = JSON.parse(await fs.readFile(filePath, "utf8"));
-        } catch {
-            currentContent = null;
+            currentContent = JSON.parse(raw);
+        } catch (parseErr) {
+            await fs.unlink(backupPath).catch(() => {});
+            throw new Error(
+                `Archivo ${path.basename(filePath)} existente contiene JSON corrupto o inválido. Operación cancelada para proteger datos: ${
+                    parseErr instanceof Error ? parseErr.message : String(parseErr)
+                }`,
+            );
         }
     }
 
@@ -488,20 +563,16 @@ export async function saveMapExits(
     const mapDir = path.join(mapsSourceDir, `mapa_${mapNum}`);
     const specialsPath = path.join(mapDir, "specials.json");
 
-    let currentSpecials: MapSpecialsData = { id: mapNum };
-    if (existsSync(specialsPath)) {
-        try {
-            const content = await fs.readFile(specialsPath, "utf8");
-            currentSpecials = JSON.parse(content) as MapSpecialsData;
-        } catch {
-            currentSpecials = { id: mapNum };
+    await withAtomicRollback<void>(specialsPath, async (currentContent) => {
+        let currentSpecials: MapSpecialsData = { id: mapNum };
+        if (currentContent && typeof currentContent === "object") {
+            currentSpecials = { ...currentContent, id: mapNum };
         }
-    }
+        currentSpecials.id = mapNum;
+        currentSpecials.exits = exits;
 
-    currentSpecials.id = mapNum;
-    currentSpecials.exits = exits;
-
-    await atomicWriteJsonFile(specialsPath, currentSpecials);
+        return { dataToSave: currentSpecials, result: undefined };
+    });
 }
 
 /**
@@ -552,7 +623,7 @@ export async function placeMapExit(
     }
 
     // Validar que el tile de origen no esté bloqueado
-    if (options.isTileBlocked && options.isTileBlocked(mapNum, x, y)) {
+    if (callTileBlockCheck(options.isTileBlocked, mapNum, x, y)) {
         return {
             ok: false,
             reason: `La coordenada de origen (${x}, ${y}) en mapa ${mapNum} es un tile bloqueado.`,

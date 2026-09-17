@@ -353,5 +353,76 @@ describe("mapExitStorage - Validación BFS y Rollback Atómico (#10)", () => {
             assert.equal(res.ok, false);
             assert.match(res.reason || "", /No existe ninguna salida/);
         });
+
+        test("validateExitEntryBFS rechaza salida sin destinos configurados", () => {
+            const emptyEntry = { destinations: [] } as any;
+            const res = validateExitEntryBFS(emptyEntry);
+            assert.equal(res.ok, false);
+            assert.match(res.reason || "", /no contiene destinos válidos/);
+        });
+
+        test("checkExitConnectivityBFS soporta función isTileBlocked con firma (x, y)", () => {
+            // Callback con 2 argumentos estilo mapNpcStorage
+            const isBlocked2Args = (x: number, y: number) => x === 50 && y === 50;
+
+            const resBlocked = checkExitConnectivityBFS(
+                { map: 1, x: 50, y: 50 },
+                { isTileBlocked: isBlocked2Args },
+            );
+            assert.equal(resBlocked.ok, false);
+            assert.match(resBlocked.reason || "", /está bloqueado/);
+
+            const resFree = checkExitConnectivityBFS(
+                { map: 1, x: 51, y: 51 },
+                { isTileBlocked: isBlocked2Args },
+            );
+            assert.equal(resFree.ok, true);
+        });
+
+        test("checkExitConnectivityBFS valida límites en esquina (1, 1) sin exigir más de 2 vecinos físicos", () => {
+            // (1, 1) en la grilla solo tiene 2 vecinos físicos posibles: (1, 2) y (2, 1)
+            const result = checkExitConnectivityBFS(
+                { map: 1, x: 1, y: 1 },
+                { minAccessibleNeighbors: 4 }, // No puede haber 4 físicamente en una esquina
+            );
+            assert.equal(result.ok, true);
+            assert.equal(result.accessibleNeighbors, 2);
+        });
+
+        test("checkExitConnectivityBFS rechaza targetCoords fuera de límites o bloqueadas inmediatamente", () => {
+            const resOutOfBounds = checkExitConnectivityBFS(
+                { map: 1, x: 10, y: 10 },
+                { targetCoords: { x: 105, y: 10 } },
+            );
+            assert.equal(resOutOfBounds.ok, false);
+            assert.match(resOutOfBounds.reason || "", /fuera de límites/);
+
+            const resTargetBlocked = checkExitConnectivityBFS(
+                { map: 1, x: 10, y: 10 },
+                {
+                    targetCoords: { x: 20, y: 20 },
+                    isTileBlocked: (_m, x, y) => x === 20 && y === 20,
+                },
+            );
+            assert.equal(resTargetBlocked.ok, false);
+            assert.match(resTargetBlocked.reason || "", /está bloqueada/);
+        });
+
+        test("withAtomicRollback aborta y no sobrescribe archivo si el JSON original está corrupto", async () => {
+            const corruptFile = path.join(tempDir, "corrupted.json");
+            await fs.writeFile(corruptFile, "{ esto_no_es_json_valido ", "utf8");
+
+            await assert.rejects(
+                () =>
+                    withAtomicRollback(corruptFile, async (content) => {
+                        return { dataToSave: { fixed: true }, result: true };
+                    }),
+                /JSON corrupto o inválido/,
+            );
+
+            // Verificar que el contenido corrupto original no fue borrado ni alterado
+            const content = await fs.readFile(corruptFile, "utf8");
+            assert.equal(content, "{ esto_no_es_json_valido ");
+        });
     });
 });
