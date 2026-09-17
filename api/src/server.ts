@@ -122,6 +122,21 @@ import {
     tileEntitySchema,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import {
+    doorSchema,
+    doorStateSchema,
+    floorObjectSchema,
+    moveFloorObjectSchema,
+    placeDoor,
+    placeFloorObject,
+    placeSign,
+    placeStructure,
+    setDoorState,
+    signSchema,
+    structureSchema,
+    moveFloorObject,
+    PlacementValidationError,
+} from "./repositories/worldBuilderObjects";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -1221,6 +1236,144 @@ app.delete(
         }
     },
 );
+
+
+/** #9: floor object with amount (catalog-validated). */
+app.put("/admin/game-data/maps/:mapNum/objects", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        const parsed = floorObjectSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+        response.json(await placeFloorObject(mapNum, parsed.data, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        const status = error instanceof PlacementValidationError && error.code === "invalid_obj_index" ? 404 : 400;
+        response.status(status).json({ error: message });
+    }
+});
+
+/** #9: move floor object atomically between tiles. */
+app.post("/admin/game-data/maps/:mapNum/objects/move", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        const parsed = moveFloorObjectSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+        response.json(await moveFloorObject(mapNum, parsed.data, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** #9: atomic multi-tile structure on layers 3/4. */
+app.put("/admin/game-data/maps/:mapNum/structures", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        const parsed = structureSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+        response.json(await placeStructure(mapNum, parsed.data, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** #9: place door with open/closed collision sync. */
+app.put("/admin/game-data/maps/:mapNum/doors", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        const parsed = doorSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+        response.json(await placeDoor(mapNum, parsed.data, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        const status = error instanceof PlacementValidationError && error.code === "invalid_obj_index" ? 404 : 400;
+        response.status(status).json({ error: message });
+    }
+});
+
+/** #9: toggle door state + blocked flag. */
+app.post("/admin/game-data/maps/:mapNum/doors/:x/:y/state", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        const x = Number.parseInt(request.params.x ?? "", 10);
+        const y = Number.parseInt(request.params.y ?? "", 10);
+        if (!Number.isInteger(mapNum) || !Number.isInteger(x) || !Number.isInteger(y)) {
+            response.status(400).json({ error: "Parametros invalidos." });
+            return;
+        }
+        const parsed = doorStateSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+        response.json(await setDoorState(mapNum, x, y, parsed.data.state, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** #9: place sign/cartel with associated text. */
+app.put("/admin/game-data/maps/:mapNum/signs", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+        const parsed = signSchema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: JSON.stringify(parsed.error.issues) });
+            return;
+        }
+        response.json(await placeSign(mapNum, parsed.data, authorized.session.account._id));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        const status = error instanceof PlacementValidationError && error.code === "invalid_obj_index" ? 404 : 400;
+        response.status(status).json({ error: message });
+    }
+});
 
 app.get(
     "/internal/game-data/objects",
