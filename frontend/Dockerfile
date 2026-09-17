@@ -5,6 +5,20 @@ ENV PATH="$PNPM_HOME:$PATH"
 
 RUN corepack enable
 
+FROM base AS maps
+WORKDIR /work/server
+
+COPY server/src/mapNpcStorage.ts src/mapNpcStorage.ts
+COPY server/src/scripts/exportFrontendOptimizedMaps.ts src/scripts/exportFrontendOptimizedMaps.ts
+COPY server/mapas_source/ mapas_source/
+
+RUN pnpm dlx tsx@4.22.1 src/scripts/exportFrontendOptimizedMaps.ts --output-dir=/maps_optimized \
+    && test -f /maps_optimized/mapa_1.json \
+    && SOURCE_COUNT="$(find mapas_source -mindepth 1 -maxdepth 1 -type d -name 'mapa_*' | wc -l)" \
+    && OUTPUT_COUNT="$(find /maps_optimized -maxdepth 1 -type f -name 'mapa_*.json' | wc -l)" \
+    && echo "Export check: ${SOURCE_COUNT} dirs en mapas_source, ${OUTPUT_COUNT} mapa_*.json" \
+    && test "${SOURCE_COUNT}" -eq "${OUTPUT_COUNT}"
+
 FROM base AS deps
 WORKDIR /app/frontend
 
@@ -44,6 +58,9 @@ ENV GAME_DATA_ADMIN_PROXY_TOKEN=$GAME_DATA_ADMIN_PROXY_TOKEN
 
 COPY packages/protocol /app/packages/protocol
 COPY frontend .
+RUN rm -rf ./public/maps_optimized
+COPY --from=maps /maps_optimized ./public/maps_optimized
+RUN node ./scripts/require-optimized-maps.mjs
 RUN pnpm build
 
 FROM base AS runtime
