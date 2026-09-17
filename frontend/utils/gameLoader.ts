@@ -54,6 +54,12 @@ const mapValueCache = new Map<number, MapData>();
 const DYNAMIC_INSTANCE_MAP_START = 30_000;
 const DYNAMIC_INSTANCE_MAP_STRIDE = 50;
 const CHALLENGE_INSTANCE_MAP_START = 2_000;
+/** OpenAO #24: isolated user-created maps (between local static and challenges). */
+export const USER_MAP_ID_MIN = 600;
+export const USER_MAP_ID_MAX = 999;
+export function isUserCreatedMapId(mapNumber: number): boolean {
+    return mapNumber >= USER_MAP_ID_MIN && mapNumber <= USER_MAP_ID_MAX;
+}
 const CHALLENGE_INSTANCE_BASE_MAP_ID = 506;
 const MAP_ASSET_VERSIONS: Partial<Record<number, string>> = {
     166: "1.0",
