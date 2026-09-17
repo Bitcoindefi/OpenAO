@@ -15,6 +15,13 @@ COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml 
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
+WORKDIR /app
+# Install server deps for map export script
+COPY server/package.json server/pnpm-lock.yaml server/pnpm-workspace.yaml ./server/
+COPY packages/protocol ./packages/protocol
+COPY server/src ./server/src
+RUN cd server && pnpm install --no-frozen-lockfile && pnpm export-frontend-maps
+# Now build frontend (maps_optimized are already in frontend/public)
 WORKDIR /app/frontend
 
 ARG API_BASE_URL=http://localhost:3001
