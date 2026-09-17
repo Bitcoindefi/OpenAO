@@ -17,7 +17,7 @@ import type {
     RuntimeNpc,
 } from "./types/runtime";
 
-import { reloadBalanceDiff, reloadCraftingRecipesDiff, reloadNpcsDiff, reloadObjectsDiff } from "./gameDataSync";
+import { reloadBalanceDiff, reloadCraftingRecipesDiff, reloadMapsDiff, reloadNpcsDiff, reloadObjectsDiff } from "./gameDataSync";
 import {
     appendMapNpcPlacement,
     loadAllMapNpcPlacements,
@@ -3785,6 +3785,60 @@ const command: CommandApi = {
                         0,
                         ws as CommandClient,
                     );
+                    break;
+                }
+
+                case "/recargarmapas": {
+                    if (!hasAdminPrivileges(user)) {
+                        break;
+                    }
+
+                    const result = await reloadMapsDiff();
+                    handleProtocol.console(
+                        `[INFO] Mapas recargados. Total mapas: ${result.reloadedMaps.length}. Personajes preservados: ${result.charactersPreserved}. NPCs preservados: ${result.npcsPreserved}.`,
+                        "#E69500",
+                        0,
+                        0,
+                        ws as CommandClient,
+                    );
+                    break;
+                }
+
+                case "/recargarmapa": {
+                    if (!hasAdminPrivileges(user)) {
+                        break;
+                    }
+
+                    const targetMapNum = parseInt(nextText.trim(), 10);
+                    if (isNaN(targetMapNum) || targetMapNum < 1) {
+                        handleProtocol.console(
+                            `[ERROR] Uso: /recargarmapa [numero_de_mapa]`,
+                            "#FF0000",
+                            0,
+                            0,
+                            ws as CommandClient,
+                        );
+                        break;
+                    }
+
+                    const result = await reloadMapsDiff(targetMapNum);
+                    if (result.reloadedMaps.length === 0) {
+                        handleProtocol.console(
+                            `[ERROR] No se pudo recargar el mapa ${targetMapNum} (archivos no encontrados).`,
+                            "#FF0000",
+                            0,
+                            0,
+                            ws as CommandClient,
+                        );
+                    } else {
+                        handleProtocol.console(
+                            `[INFO] Mapa ${targetMapNum} recargado exitosamente. Personajes preservados: ${result.charactersPreserved}. NPCs preservados: ${result.npcsPreserved}.`,
+                            "#E69500",
+                            0,
+                            0,
+                            ws as CommandClient,
+                        );
+                    }
                     break;
                 }
 

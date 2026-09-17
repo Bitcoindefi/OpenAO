@@ -47,6 +47,12 @@ export type ReloadCraftingRecipesDiffResult = {
     updatedRecipes: number;
 };
 
+export type ReloadMapsDiffResult = {
+    reloadedMaps: number[];
+    charactersPreserved: number;
+    npcsPreserved: number;
+};
+
 export type InitializeNpcTemplatesResult = {
     currentVersion: number;
     loadedTemplates: number;
@@ -493,6 +499,56 @@ async function initializeBalanceFromApi(): Promise<InitializeBalanceResult> {
     };
 }
 
+function notifyCharactersOnReloadedMaps(reloadedMapIds: number[]): number {
+    const handleProtocol = require("./handleProtocol");
+    const socket = require("./socket");
+    let notifiedCount = 0;
+    const mapSet = new Set(reloadedMapIds);
+
+    if (vars.personajes) {
+        for (const user of Object.values(vars.personajes) as any[]) {
+            const userMap = Number(user?.map ?? 0);
+            const userId = Number(user?.id ?? 0);
+            if (userMap && mapSet.has(userMap) && userId) {
+                const client = getClientById(userId);
+                if (client && client.readyState === client.OPEN) {
+                    try {
+                        handleProtocol.sendMyCharacter(user);
+                        socket.send(client);
+                        notifiedCount += 1;
+                    } catch {
+                        // Ignore detached socket
+                    }
+                }
+            }
+        }
+    }
+    return notifiedCount;
+}
+
+async function reloadMapsDiff(mapNum?: number): Promise<ReloadMapsDiffResult> {
+    const LoadMaps = require("./loadMaps");
+    const loader = new LoadMaps();
+
+    let result: ReloadMapsDiffResult;
+    if (typeof mapNum === "number" && mapNum > 0) {
+        const singleResult = await loader.reloadMap(mapNum);
+        result = {
+            reloadedMaps: singleResult.reloaded ? [mapNum] : [],
+            charactersPreserved: singleResult.charactersPreserved,
+            npcsPreserved: singleResult.npcsPreserved,
+        };
+    } else {
+        result = await loader.reloadAllMaps();
+    }
+
+    if (result.reloadedMaps.length > 0) {
+        notifyCharactersOnReloadedMaps(result.reloadedMaps);
+    }
+
+    return result;
+}
+
 export {
     initializeBalanceFromApi,
     initializeCraftingRecipesFromApi,
@@ -501,6 +557,7 @@ export {
     initializeSmeltingRecipesFromApi,
     reloadBalanceDiff,
     reloadCraftingRecipesDiff,
+    reloadMapsDiff,
     reloadObjectsDiff,
     reloadNpcsDiff,
 };
