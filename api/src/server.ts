@@ -122,6 +122,24 @@ import {
     tileEntitySchema,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import {
+    approveMap,
+    claimForReview,
+    createMap,
+    deleteMap,
+    getMapById,
+    getMapByNumber,
+    getMapReports,
+    getMapReviews,
+    getModerationQueue,
+    listOwnMaps,
+    listPublishedMaps,
+    proposeMap,
+    rejectMap,
+    reportMap,
+    unpublishMap,
+    updateMapDraft,
+} from "./repositories/userMaps";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -1221,6 +1239,430 @@ app.delete(
         }
     },
 );
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Etapa 5: Mapas de usuario, propuestas y moderacion (Issue #25)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Crear nuevo mapa de usuario como borrador */
+app.post("/maps/user", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        const { name, mapData } = request.body;
+        if (!name || typeof name !== "string") {
+            response.status(400).json({ error: "Nombre de mapa requerido." });
+            return;
+        }
+
+        const result = await createMap(
+            authorized.session.account._id,
+            name,
+            mapData ?? {},
+        );
+
+        if ("error" in result) {
+            response.status(400).json({ error: result.error });
+            return;
+        }
+
+        response.status(201).json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Listar mapas del usuario autenticado */
+app.get("/maps/user/mine", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        const maps = await listOwnMaps(authorized.session.account._id);
+        response.json({ maps });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Listar mapas publicados de la comunidad */
+app.get("/maps/user/published", async (request, response) => {
+    try {
+        const limit = Number.parseInt(String(request.query.limit ?? "20"), 10);
+        const offset = Number.parseInt(String(request.query.offset ?? "0"), 10);
+        const maps = await listPublishedMaps(limit, offset);
+        response.json({ maps });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Obtener un mapa por ID */
+app.get("/maps/user/:id", async (request, response) => {
+    try {
+        const mapId = request.params.id;
+        const authorized = await getAuthorizedSession(request);
+        const isMod = Boolean(
+            authorized && isAuthorizedGameDataAdmin(authorized.session),
+        );
+
+        const map = await getMapById(
+            mapId,
+            authorized?.session.account._id,
+            isMod,
+        );
+
+        if (!map) {
+            response.status(404).json({ error: "Mapa no encontrado." });
+            return;
+        }
+
+        response.json(map);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Obtener un mapa por número en el rango reservado (100,000 - 999,999) */
+app.get("/maps/user/by-number/:mapNum", async (request, response) => {
+    try {
+        const mapNum = Number.parseInt(request.params.mapNum, 10);
+        if (!Number.isInteger(mapNum)) {
+            response.status(400).json({ error: "Número de mapa inválido." });
+            return;
+        }
+
+        const authorized = await getAuthorizedSession(request);
+        const isMod = Boolean(
+            authorized && isAuthorizedGameDataAdmin(authorized.session),
+        );
+
+        const map = await getMapByNumber(
+            mapNum,
+            authorized?.session.account._id,
+            isMod,
+        );
+
+        if (!map) {
+            response.status(404).json({ error: "Mapa no encontrado o no disponible." });
+            return;
+        }
+
+        response.json(map);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Eliminar/archivar mapa (sólo dueño) */
+app.delete("/maps/user/:id", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        const mapId = request.params.id;
+        const result = await deleteMap(mapId, authorized.session.account._id);
+        if (!result.ok) {
+            const status = result.error?.includes("No autorizado") ? 403 : 400;
+            response.status(status).json({ error: result.error });
+            return;
+        }
+
+        response.json({ ok: true, message: "Mapa archivado correctamente." });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Editar un mapa en borrador o rechazado */
+app.put("/maps/user/:id", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        const mapId = request.params.id;
+        const { name, mapData } = request.body;
+
+        const result = await updateMapDraft(
+            mapId,
+            authorized.session.account._id,
+            { name, mapData },
+        );
+
+        if (!result) {
+            response.status(404).json({ error: "Mapa no encontrado." });
+            return;
+        }
+
+        if ("error" in result) {
+            response.status(400).json({ error: result.error });
+            return;
+        }
+
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Proponer un mapa a moderación (corre validaciones automáticas primero) */
+app.post("/maps/user/:id/propose", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        const mapId = request.params.id;
+        const result = await proposeMap(
+            mapId,
+            authorized.session.account._id,
+        );
+
+        if (!result.ok) {
+            response.status(400).json({
+                error: result.error,
+                automatedChecks: result.automatedChecks,
+            });
+            return;
+        }
+
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Reportar un mapa publicado */
+app.post("/maps/user/:id/report", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        const mapId = request.params.id;
+        const { reason } = request.body;
+        if (!reason || typeof reason !== "string") {
+            response.status(400).json({ error: "Motivo del reporte requerido." });
+            return;
+        }
+
+        const result = await reportMap(
+            mapId,
+            authorized.session.account._id,
+            reason,
+        );
+
+        if (!result.ok) {
+            response.status(400).json({ error: result.error });
+            return;
+        }
+
+        response.json({ ok: true, message: "Mapa reportado correctamente." });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+// ── Endpoints de Moderación (Admin / Moderadores) ─────────────────────────────
+
+/** Cola de moderación con vista previa completa de datos de mapa */
+app.get("/admin/moderation/maps/queue", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const limit = Number.parseInt(String(request.query.limit ?? "20"), 10);
+        const offset = Number.parseInt(String(request.query.offset ?? "0"), 10);
+        const filter =
+            request.query.state === "proposed" || request.query.state === "in_review"
+                ? request.query.state
+                : undefined;
+
+        const queue = await getModerationQueue(limit, offset, filter);
+        response.json({ queue });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Reclamar mapa para revisión ('in_review') */
+app.post("/admin/moderation/maps/:id/claim", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapId = request.params.id;
+        const result = await claimForReview(
+            mapId,
+            authorized.session.account._id,
+            request.body?.notes,
+        );
+
+        if (!result.ok) {
+            response.status(400).json({ error: result.error });
+            return;
+        }
+
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Aprobar mapa ('published') */
+app.post("/admin/moderation/maps/:id/approve", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapId = request.params.id;
+        const result = await approveMap(
+            mapId,
+            authorized.session.account._id,
+            request.body?.notes,
+        );
+
+        if (!result.ok) {
+            response.status(400).json({ error: result.error });
+            return;
+        }
+
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Rechazar mapa con motivo obligatorio ('rejected') */
+app.post("/admin/moderation/maps/:id/reject", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapId = request.params.id;
+        const { reason, notes } = request.body ?? {};
+
+        const result = await rejectMap(
+            mapId,
+            authorized.session.account._id,
+            reason,
+            notes,
+        );
+
+        if (!result.ok) {
+            response.status(400).json({ error: result.error });
+            return;
+        }
+
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Despublicar mapa publicado si surge un problema */
+app.post("/admin/moderation/maps/:id/unpublish", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapId = request.params.id;
+        const { reason } = request.body ?? {};
+
+        const result = await unpublishMap(
+            mapId,
+            authorized.session.account._id,
+            reason,
+        );
+
+        if (!result.ok) {
+            response.status(400).json({ error: result.error });
+            return;
+        }
+
+        response.json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Consultar reportes de un mapa */
+app.get("/admin/moderation/maps/:id/reports", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapId = request.params.id;
+        const reports = await getMapReports(mapId);
+        response.json({ reports });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Consultar historial de revisiones de un mapa */
+app.get("/admin/moderation/maps/:id/reviews", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapId = request.params.id;
+        const reviews = await getMapReviews(mapId);
+        response.json({ reviews });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
 
 app.get(
     "/internal/game-data/objects",
