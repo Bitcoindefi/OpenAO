@@ -9,6 +9,10 @@ type PasswordResetEmailInput = {
 
 let sesClient: SESv2Client | null = null;
 
+function isSesConfigured(): boolean {
+  return !!(config.sesRegion && config.sesAccessKeyId && config.sesSecretAccessKey && config.sesFromEmail);
+}
+
 function getSesClient(): SESv2Client {
   if (!config.sesRegion || !config.sesAccessKeyId || !config.sesSecretAccessKey || !config.sesFromEmail) {
     throw new Error("Amazon SES no esta configurado");
@@ -101,6 +105,12 @@ function buildPasswordResetText({ displayName, resetUrl }: PasswordResetEmailInp
 }
 
 export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<void> {
+  if (!isSesConfigured()) {
+    throw new Error(
+      "Amazon SES no esta configurado. Configura SES_REGION, SES_ACCESS_KEY_ID, SES_SECRET_ACCESS_KEY y SES_FROM_EMAIL en .env"
+    );
+  }
+
   const client = getSesClient();
 
   await client.send(new SendEmailCommand({
