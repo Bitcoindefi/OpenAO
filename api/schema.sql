@@ -652,3 +652,31 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+-- Permisos granulares de edicion de mapa por cuenta (#4).
+-- map_num = 0: permiso global sobre mapas NO protegidos.
+CREATE TABLE IF NOT EXISTS game_map_permissions (
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    map_num INTEGER NOT NULL CHECK (map_num >= 0),
+    granted_by UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (account_id, map_num)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_permissions_account_map
+    ON game_map_permissions(account_id, map_num);
+
+-- Bitacora de mutaciones de mapa (#4 atribucion quien/que/cuando).
+CREATE TABLE IF NOT EXISTS game_map_mutation_log (
+    id BIGSERIAL PRIMARY KEY,
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    map_num INTEGER NOT NULL CHECK (map_num > 0),
+    kind TEXT NOT NULL,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_mutation_log_map
+    ON game_map_mutation_log(map_num, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_game_map_mutation_log_account
+    ON game_map_mutation_log(account_id, created_at DESC);
