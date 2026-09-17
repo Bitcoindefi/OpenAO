@@ -14,6 +14,11 @@ import React, {
     useState,
 } from "react";
 import { MapRenderer } from "../../components/game";
+import LandscapePlayGate from "../../components/game/mobile/LandscapePlayGate";
+import {
+    computeCompactCanvasScale,
+    shouldUseCompactPlayLayout,
+} from "../../lib/mobile/playability";
 import AdminIntervalsModal from "../../components/AdminIntervalsModal";
 import BuffStatusSidebar from "../../components/BuffStatusSidebar";
 import InventoryFloatingPanel from "../../components/InventoryFloatingPanel";
@@ -863,6 +868,8 @@ function HomeContent() {
     const [deathHomePromptOpen, setDeathHomePromptOpen] = useState(false);
     const [arenaLeavePending, setArenaLeavePending] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [isCompactPlayLayout, setIsCompactPlayLayout] = useState(false);
+    const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
     const [fullscreenError, setFullscreenError] = useState<string | null>(null);
     const [showFullscreenHint, setShowFullscreenHint] = useState(false);
     const [showFullscreenPrompt, setShowFullscreenPrompt] = useState(false);
@@ -1081,6 +1088,33 @@ function HomeContent() {
         updateViewport();
         window.addEventListener("resize", updateViewport);
         return () => window.removeEventListener("resize", updateViewport);
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const coarseQuery = window.matchMedia("(pointer: coarse)");
+        const updateCompact = () => {
+            setIsCompactPlayLayout(
+                shouldUseCompactPlayLayout({
+                    pointerCoarse: coarseQuery.matches,
+                    maxTouchPoints: navigator.maxTouchPoints || 0,
+                    viewportWidth: window.innerWidth,
+                }),
+            );
+        };
+
+        updateCompact();
+        coarseQuery.addEventListener("change", updateCompact);
+        window.addEventListener("resize", updateCompact);
+        window.addEventListener("orientationchange", updateCompact);
+        return () => {
+            coarseQuery.removeEventListener("change", updateCompact);
+            window.removeEventListener("resize", updateCompact);
+            window.removeEventListener("orientationchange", updateCompact);
+        };
     }, []);
 
     useEffect(() => {
@@ -1474,17 +1508,20 @@ function HomeContent() {
         HUD_GAP +
         COLUMN_SECTION_GAP;
 
-    const isDesktopConsoleLayout = isFullscreen
-        ? viewport.width > 768
-        : viewport.width > 768 && viewport.height >= minimumPinnedConsoleHeight;
+    const isDesktopConsoleLayout = isCompactPlayLayout
+        ? false
+        : isFullscreen
+          ? viewport.width > 768
+          : viewport.width > 768 &&
+            viewport.height >= minimumPinnedConsoleHeight;
 
-    const shellTopPadding = isFullscreen
+    const shellTopPadding = isFullscreen || isCompactPlayLayout
         ? SHELL_TOP_PADDING_FULLSCREEN
         : SHELL_VERTICAL_PADDING;
-    const shellBottomPadding = isFullscreen
+    const shellBottomPadding = isFullscreen || isCompactPlayLayout
         ? SHELL_BOTTOM_PADDING_FULLSCREEN
         : SHELL_VERTICAL_PADDING;
-    const shellHorizontalPadding = isFullscreen
+    const shellHorizontalPadding = isFullscreen || isCompactPlayLayout
         ? SHELL_HORIZONTAL_PADDING_FULLSCREEN
         : SHELL_HORIZONTAL_PADDING;
 
@@ -1528,7 +1565,24 @@ function HomeContent() {
     }, []);
 
     const hudScale = useMemo(() => {
-        if (!isFullscreen || !viewport.width || !viewport.height) {
+        if (!viewport.width || !viewport.height) {
+            return 1;
+        }
+
+        // Compact mobile: scale the canvas alone (HUD becomes overlays).
+        if (isCompactPlayLayout) {
+            return computeCompactCanvasScale({
+                viewportWidth: viewport.width,
+                viewportHeight: viewport.height,
+                canvasBaseWidth: CANVAS_BASE_WIDTH,
+                canvasBaseHeight: CANVAS_BASE_HEIGHT,
+                horizontalPadding: shellHorizontalPadding,
+                verticalPadding: 8,
+                reservedBottomPx: Math.min(96, macroBarSize.height),
+            });
+        }
+
+        if (!isFullscreen) {
             return 1;
         }
 
@@ -1559,6 +1613,7 @@ function HomeContent() {
 
         return Math.min(MAX_FULLSCREEN_HUD_SCALE, nextScale);
     }, [
+        isCompactPlayLayout,
         isDesktopConsoleLayout,
         isFullscreen,
         macroBarSize.height,
@@ -1581,7 +1636,7 @@ function HomeContent() {
             };
         }
 
-        if (!isFullscreen) {
+        if (!isFullscreen && !isCompactPlayLayout) {
             return {
                 canvasWidth: CANVAS_BASE_WIDTH,
                 canvasHeight: CANVAS_BASE_HEIGHT,
@@ -1597,7 +1652,13 @@ function HomeContent() {
             canvasWidth: scaledCanvasSize,
             canvasHeight: scaledCanvasSize,
         };
-    }, [hudScale, isFullscreen, viewport.height, viewport.width]);
+    }, [
+        hudScale,
+        isCompactPlayLayout,
+        isFullscreen,
+        viewport.height,
+        viewport.width,
+    ]);
 
     const toggleFullscreen = useCallback(async () => {
         const shellElement = gameShellRef.current;
@@ -2630,7 +2691,7 @@ function HomeContent() {
     return (
         <div
             ref={setGameShellNode}
-            className="game-shell"
+            className={`game-shell${isCompactPlayLayout ? " mobile-compact-play" : ""}`}
             onContextMenu={(event) => {
                 event.preventDefault();
             }}
@@ -2638,6 +2699,7 @@ function HomeContent() {
                 event.preventDefault();
             }}
         >
+            <LandscapePlayGate enabled={isCompactPlayLayout} />
             <div
                 className={`pointer-events-none fixed inset-0 z-20 flex justify-center overflow-hidden ${
                     isFullscreen ? "items-start" : "items-center"
@@ -2784,6 +2846,45 @@ function HomeContent() {
                                         setCharacterStatsSnapshot(snapshot);
                                         setCharacterStatsLoading(false);
                                         setCharacterStatsOpen(true);
+                                    }}
+                                    mobileControlsEnabled={isCompactPlayLayout}
+                                    onMobileOpenChat={() => setIsChatOpen(true)}
+                                    onMobileTogglePanel={() =>
+                                        setMobilePanelOpen((open) => !open)
+                                    }
+                                    onMobileCastSpell={() => {
+                                        const spell =
+                                            selectedSpellSlot === null
+                                                ? null
+                                                : (hud?.spells.find(
+                                                      (entry) =>
+                                                          entry.slot ===
+                                                          selectedSpellSlot,
+                                                  ) ?? null);
+                                        if (!spell) {
+                                            setMobilePanelOpen(true);
+                                            return;
+                                        }
+                                        setSpellTargetRequest((current) => ({
+                                            slot: spell.slot,
+                                            manaRequired: spell.manaRequired,
+                                            name: spell.name,
+                                            token: (current?.token ?? 0) + 1,
+                                        }));
+                                    }}
+                                    onMobileUseItem={() => {
+                                        const equipped =
+                                            hud?.inventory.find(
+                                                (item) => item.equipped,
+                                            ) ?? hud?.inventory[0];
+                                        if (!equipped) {
+                                            setMobilePanelOpen(true);
+                                            return;
+                                        }
+                                        setUseItemURequest((current) => ({
+                                            slot: equipped.slot,
+                                            token: (current?.token ?? 0) + 1,
+                                        }));
                                     }}
                                 />
 
@@ -3095,7 +3196,8 @@ function HomeContent() {
                                 ) : null}
                             </div>
 
-                            {isCharacterSettingsLoading ? (
+                            {!isCompactPlayLayout ? (
+                            isCharacterSettingsLoading ? (
                                 <ScaledHudFrame
                                     scale={hudScale}
                                     baseWidth={CANVAS_BASE_WIDTH}
@@ -3150,11 +3252,31 @@ function HomeContent() {
                                         onSendCommand={sendChatMessage}
                                     />
                                 </ScaledHudFrame>
-                            )}
+                            )
+                            ) : null}
                         </div>
 
+                        {(!isCompactPlayLayout || mobilePanelOpen) && (
+                        <div
+                            className={
+                                isCompactPlayLayout
+                                    ? "mobile-panel-sheet pointer-events-auto fixed inset-y-0 right-0 z-50 max-w-[100vw] overflow-y-auto bg-stone-950/92 p-3 shadow-2xl backdrop-blur-md"
+                                    : undefined
+                            }
+                        >
+                        {isCompactPlayLayout ? (
+                            <div className="mb-2 flex justify-end">
+                                <button
+                                    type="button"
+                                    className="rounded-full border border-white/15 bg-stone-900/80 px-3 py-1 text-xs text-stone-200"
+                                    onClick={() => setMobilePanelOpen(false)}
+                                >
+                                    Cerrar panel
+                                </button>
+                            </div>
+                        ) : null}
                         <ScaledHudFrame
-                            scale={hudScale}
+                            scale={isCompactPlayLayout ? Math.min(hudScale, 1) : hudScale}
                             baseWidth={RIGHT_PANEL_WIDTH}
                             onMeasure={handleRightColumnMeasure}
                         >
@@ -3460,6 +3582,8 @@ function HomeContent() {
                                 </div>
                             </div>
                         </ScaledHudFrame>
+                        </div>
+                        )}
                     </div>
                 </div>
             </div>

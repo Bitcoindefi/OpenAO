@@ -70,3 +70,15 @@ html.game-targeting body *::after {
         -webkit-overflow-scrolling: touch;
     }
 }
+
+/* Compact mobile play: keep shell fixed without changing desktop. */
+.game-shell.mobile-compact-play {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+}
+
+.game-shell.mobile-compact-play .mobile-panel-sheet {
+    pointer-events: auto;
+}
+

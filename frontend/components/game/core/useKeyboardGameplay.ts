@@ -315,14 +315,27 @@ export function useKeyboardGameplay({
             clearMovementInputState(engineRef.current);
         };
 
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "hidden") {
+                clearMovementInputState(engineRef.current);
+            }
+        };
+
         document.addEventListener("keydown", handleKeyDown, true);
         document.addEventListener("keyup", handleKeyUp, true);
         window.addEventListener("blur", handleBlur);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        window.addEventListener("pagehide", handleBlur);
 
         return () => {
             document.removeEventListener("keydown", handleKeyDown, true);
             document.removeEventListener("keyup", handleKeyUp, true);
             window.removeEventListener("blur", handleBlur);
+            document.removeEventListener(
+                "visibilitychange",
+                handleVisibilityChange,
+            );
+            window.removeEventListener("pagehide", handleBlur);
         };
     }, [
         canProcessMovementInput,
