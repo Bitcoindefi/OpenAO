@@ -104,6 +104,9 @@ jobs:
           TOKEN_AUTH: test-token-secret
           NODE_ENV: test
           CORS_ORIGIN: "http://localhost:3000"
+          GAME_DATA_ADMIN_EMAIL: admin@test.local
+          GAME_DATA_ADMIN_ACCOUNT_ID: test-admin-account-id
+          GAME_DATA_ADMIN_PROXY_TOKEN: test-admin-proxy-token
         run: |
           pnpm exec tsx src/server.ts &
           for i in {1..30}; do

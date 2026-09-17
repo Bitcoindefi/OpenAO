@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import fs from "fs";
 import { existsSync } from "fs";
 import fs from "fs/promises";
 import path from "path";
@@ -610,6 +611,137 @@ export async function clearTile(
     return (result.rowCount ?? 0) > 0;
 }
 
+// ─── Rectangle paint ──────────────────────────────────────────────────────────
+
+const rawPaintRectangleSchema = z.object({
+    startX: z.coerce.number().int().min(1).max(MAP_SIZE),
+    startY: z.coerce.number().int().min(1).max(MAP_SIZE),
+    endX: z.coerce.number().int().min(1).max(MAP_SIZE),
+    endY: z.coerce.number().int().min(1).max(MAP_SIZE),
+    layer: z.coerce.number().int().min(1).max(4),
+    grhIndex: z.coerce.number().int().nonnegative().nullable().optional(),
+    blocked: z.boolean().nullable().optional(),
+});
+
+export const paintRectangleSchema = rawPaintRectangleSchema.refine(
+    (data) => {
+        const minX = Math.min(data.startX, data.endX);
+        const maxX = Math.max(data.startX, data.endX);
+        const minY = Math.min(data.startY, data.endY);
+        const maxY = Math.max(data.startY, data.endY);
+        const width = maxX - minX + 1;
+        const height = maxY - minY + 1;
+        return width * height <= 500;
+    },
+    {
+        message:
+            "El rectangulo no puede superar 500 tiles (ancho x alto <= 500).",
+    },
+);
+
+export type PaintRectangleInput = z.infer<typeof rawPaintRectangleSchema>;
+
+/**
+ * Pinta un rectangulo de tiles como BORRADOR.
+ *
+ * Expande el rectangulo a tiles individuales y delega en paintTiles(),
+ * que ya maneja la atomicidad y la validacion de graficos.
+ */
+export async function paintRectangle(
+    mapNum: number,
+    input: PaintRectangleInput,
+    accountId: string,
+): Promise<{ applied: number }> {
+    const minX = Math.min(input.startX, input.endX);
+    const maxX = Math.max(input.startX, input.endX);
+    const minY = Math.min(input.startY, input.endY);
+    const maxY = Math.max(input.startY, input.endY);
+
+    const tiles: TilePaint[] = [];
+
+    for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+            tiles.push({
+                x,
+                y,
+                layer: input.layer,
+                grhIndex: input.grhIndex,
+                blocked: input.blocked,
+            });
+        }
+    }
+
+    return paintTiles(mapNum, tiles, accountId);
+}
+
+// ─── Region query ─────────────────────────────────────────────────────────────
+
+export const queryRegionSchema = z.object({
+    startX: z.coerce.number().int().min(1).max(MAP_SIZE),
+    startY: z.coerce.number().int().min(1).max(MAP_SIZE),
+    endX: z.coerce.number().int().min(1).max(MAP_SIZE),
+    endY: z.coerce.number().int().min(1).max(MAP_SIZE),
+});
+
+export type QueryRegionInput = z.infer<typeof queryRegionSchema>;
+
+/**
+ * Devuelve los overrides de tiles en un rectangulo del mapa.
+ *
+ * Incluye borradores y publicados. Para la misma coordenada, el borrador tiene
+ * prioridad sobre lo publicado (DISTINCT ON con orden de status).
+ */
+export async function queryRegion(
+    mapNum: number,
+    input: QueryRegionInput,
+): Promise<MapTileOverride[]> {
+    const minX = Math.min(input.startX, input.endX);
+    const maxX = Math.max(input.startX, input.endX);
+    const minY = Math.min(input.startY, input.endY);
+    const maxY = Math.max(input.startY, input.endY);
+
+    const result = await pool.query<{
+        x: number;
+        y: number;
+        layer: number;
+        grh_index: number | null;
+        blocked: boolean | null;
+        status: string;
+    }>(
+        `SELECT DISTINCT ON (x, y, layer) x, y, layer, grh_index, blocked, status
+         FROM game_map_tile_overrides
+         WHERE map_num = $1
+           AND x BETWEEN $2 AND $3
+           AND y BETWEEN $4 AND $5
+         ORDER BY x, y, layer, status ASC`,
+        [mapNum, minX, maxX, minY, maxY],
+    );
+
+    return result.rows.map((row) => ({
+        x: row.x,
+        y: row.y,
+        layer: row.layer,
+        grhIndex: row.grh_index,
+        blocked: row.blocked,
+        status: row.status as "draft" | "published",
+    }));
+}
+
+// ─── Isolated region detection ────────────────────────────────────────────────
+
+type TerrainJson = {
+    id?: number;
+    width?: number;
+    height?: number;
+    palette?: Record<string, { graphics?: unknown; blocked?: boolean }>;
+    rows?: number[][];
+};
+
+const MAPAS_SOURCE_DIR = path.join(__dirname, "../mapas_source");
+
+function loadBaseBlockedTiles(mapNum: number): boolean[][] | null {
+    const terrainPath = path.join(
+        MAPAS_SOURCE_DIR,
 /**
  * Ruta al directorio fuente de un mapa dentro del proyecto.
  *
@@ -665,6 +797,143 @@ export async function getMapTerrainPalette(
         "terrain.json",
     );
 
+    if (!fs.existsSync(terrainPath)) {
+        return null;
+    }
+
+    const terrain = JSON.parse(
+        fs.readFileSync(terrainPath, "utf8"),
+    ) as TerrainJson;
+    const palette = terrain.palette ?? {};
+    const rows = terrain.rows ?? [];
+    const height = Math.max(1, Math.min(100, Number(terrain.height) || 100));
+    const width = Math.max(1, Math.min(100, Number(terrain.width) || 100));
+
+    const grid: boolean[][] = [];
+
+    for (let y = 0; y < height; y++) {
+        grid[y] = [];
+        const row = Array.isArray(rows[y]) ? rows[y]! : [];
+
+        for (let x = 0; x < width; x++) {
+            const paletteId = Number(row[x]) || 0;
+            const paletteTile =
+                paletteId > 0 ? palette[String(paletteId)] : undefined;
+            grid[y][x] = Boolean(paletteTile?.blocked);
+        }
+    }
+
+    return grid;
+}
+
+/**
+ * Detecta regiones caminables que quedaron aisladas despues de una edicion.
+ *
+ * Carga el mapa base desde terrain.json, aplica los overrides publicados,
+ * y ejecuta BFS desde la primera casilla caminable encontrada. Si hay
+ * casillas caminables inalcanzables, devuelve true.
+ */
+export async function checkIsolatedRegions(
+    mapNum: number,
+): Promise<{ isolated: boolean; unreachableCount: number }> {
+    const grid = loadBaseBlockedTiles(mapNum);
+
+    if (!grid) {
+        return { isolated: false, unreachableCount: 0 };
+    }
+
+    const height = grid.length;
+    const width = grid[0]!.length;
+
+    const overrides = await queryRegion(mapNum, {
+        startX: 1,
+        startY: 1,
+        endX: MAP_SIZE,
+        endY: MAP_SIZE,
+    });
+
+    for (const override of overrides) {
+        const oy = override.y - 1;
+        const ox = override.x - 1;
+
+        if (oy >= 0 && oy < height && ox >= 0 && ox < width) {
+            if (override.blocked === true) {
+                grid[oy]![ox] = true;
+            } else if (override.blocked === false) {
+                grid[oy]![ox] = false;
+            }
+        }
+    }
+
+    let seedX = -1;
+    let seedY = -1;
+
+    for (let y = 0; y < height && seedX === -1; y++) {
+        for (let x = 0; x < width && seedX === -1; x++) {
+            if (!grid[y]![x]) {
+                seedX = x;
+                seedY = y;
+            }
+        }
+    }
+
+    if (seedX === -1) {
+        return { isolated: false, unreachableCount: 0 };
+    }
+
+    const visited = Array.from({ length: height }, () =>
+        new Array<boolean>(width).fill(false),
+    );
+    const queue: Array<[number, number]> = [[seedX, seedY]];
+    visited[seedY]![seedX] = true;
+    let reachable = 0;
+
+    const directions: [number, number][] = [
+        [0, -1],
+        [0, 1],
+        [-1, 0],
+        [1, 0],
+    ];
+
+    while (queue.length > 0) {
+        const current = queue.shift()!;
+        const cx = current[0]!;
+        const cy = current[1]!;
+        reachable += 1;
+
+        for (const dir of directions) {
+            const nx = cx + dir[0]!;
+            const ny = cy + dir[1]!;
+
+            if (
+                nx >= 0 &&
+                nx < width &&
+                ny >= 0 &&
+                ny < height &&
+                !visited[ny]![nx] &&
+                !grid[ny]![nx]
+            ) {
+                visited[ny]![nx] = true;
+                queue.push([nx, ny]);
+            }
+        }
+    }
+
+    let totalWalkable = 0;
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            if (!grid[y]![x]) {
+                totalWalkable += 1;
+            }
+        }
+    }
+
+    const unreachableCount = totalWalkable - reachable;
+
+    return {
+        isolated: unreachableCount > 0,
+        unreachableCount,
     if (!existsSync(terrainPath)) {
         throw new Error(`El mapa ${mapNum} no tiene paleta fuente.`);
     }
