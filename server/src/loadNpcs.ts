@@ -1,6 +1,7 @@
 export {};
 import { buildNpcRespawnKey, getNpcRespawnCooldown, initializeNpcRespawnCooldowns } from "./npcRespawnCooldowns";
 import { loadAllMapNpcPlacements, replaceAllMapNpcPlacements } from "./mapNpcStorage";
+const { mergeNpcPlacements } = require("./mapOverrideSync");
 const { initializeNpcTemplatesFromApi } = require("./gameDataSync");
 const game = require("./game");
 const vars = require("./vars");
@@ -40,7 +41,10 @@ class LoadNpcs {
                 this.createNpcInMap(npc, true, true);
             });
 
-            const npcsInMap = loadAllMapNpcPlacements();
+            const npcsInMap = mergeNpcPlacements(
+                loadAllMapNpcPlacements(),
+                vars.publishedMapNpcPlacements,
+            );
 
             npcsInMap.map((npc: any) => {
                 if (cooldownKeys.has(buildNpcRespawnKey(npc))) {

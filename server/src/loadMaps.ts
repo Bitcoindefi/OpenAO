@@ -2,7 +2,9 @@ export {};
 const vars = require("./vars");
 const fs = require("fs");
 const path = require("path");
+const funct = require("./functions");
 const loadNpcs = require("./loadNpcs");
+const { initializeMapOverridesFromApi } = require("./mapOverrideSync");
 
 type MapMetadata = {
     id?: number;
@@ -46,6 +48,12 @@ type SpecialsMap = {
     objects?: Record<string, { objIndex?: number; amount?: number }>;
     npcs?: Record<string, number>;
     triggers?: Record<string, number>;
+};
+
+type GameMapDocument = {
+    meta?: MapMetadata;
+    terrain?: TerrainMap;
+    specials?: SpecialsMap;
 };
 
 const MAPS_SOURCE_DIR = path.join(__dirname, "../mapas_source");
@@ -173,21 +181,51 @@ class LoadMaps {
 
         await Promise.all(arMapsToLoad);
 
+        const mapsResult = (await funct.fetchUrl(`/internal/game-data/maps/changes?sinceVersion=0`, {
+            headers: {
+                Authorization: vars.tokenAuth,
+            },
+        })) as { currentVersion: number; changes: Array<{ id: number; data: GameMapDocument }> };
+
+        for (const change of mapsResult.changes) {
+            if (!change?.id || !change.data?.meta || !change.data?.terrain) {
+                continue;
+            }
+
+            this.readMap(change.id, change.data);
+        }
+
+        vars.gameDataVersions.maps = mapsResult.currentVersion;
+        console.log(`[GAME DATA] Mapas hidratados desde DB: ${mapsResult.changes.length}. Version aplicada: ${mapsResult.currentVersion}.`);
+
+        const mapNumbers = Object.keys(vars.mapa)
+            .map(Number)
+            .filter(Number.isInteger)
+            .sort((left: number, right: number) => left - right);
+        const overrideResult = await initializeMapOverridesFromApi(
+            vars,
+            mapNumbers,
+            (mapApiPath: string) => funct.fetchUrl(mapApiPath),
+        );
+        console.log(
+            `[GAME DATA] Map overrides aplicados: ${overrideResult.tileOverrides} tiles y ` +
+                `${overrideResult.entities} entidades en ${overrideResult.mapNumbers} mapas.`,
+        );
+
         console.log("Mapas Cargados.");
 
         const LoadNpcs = new loadNpcs();
         await LoadNpcs.initialize();
     }
 
-    readMap(mapNum: number) {
+    readMap(mapNum: number, document?: GameMapDocument) {
         return new Promise((resolve: (value: number) => void) => {
             const mapDir = this.getMapDirectory(mapNum);
-            const metadata = readJsonFile(path.join(mapDir, "meta.json")) as MapMetadata;
-            const terrain = readJsonFile(path.join(mapDir, "terrain.json")) as TerrainMap;
-            const specialsPath = path.join(mapDir, "specials.json");
-            const specials = fs.existsSync(specialsPath)
-                ? (readJsonFile(specialsPath) as SpecialsMap)
-                : ({ exits: {}, objects: {}, npcs: {}, triggers: {} } as SpecialsMap);
+            const metadata = document?.meta ?? (readJsonFile(path.join(mapDir, "meta.json")) as MapMetadata);
+            const terrain = document?.terrain ?? (readJsonFile(path.join(mapDir, "terrain.json")) as TerrainMap);
+            const specials = document?.specials ?? (fs.existsSync(path.join(mapDir, "specials.json"))
+                ? (readJsonFile(path.join(mapDir, "specials.json")) as SpecialsMap)
+                : ({ exits: {}, objects: {}, npcs: {}, triggers: {} } as SpecialsMap));
             const palette = terrain.palette ?? {};
             const rows = Array.isArray(terrain.rows) ? terrain.rows : [];
             const width = Math.max(1, toNumber(terrain.width, 100));

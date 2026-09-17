@@ -105,6 +105,11 @@ import {
     upsertGameBalance,
 } from "./repositories/gameBalance";
 import {
+    getGameMapById,
+    listGameMapChangesSince,
+    upsertGameMap,
+} from "./repositories/gameMaps";
+import {
     clearTile,
     discardDrafts,
     getGraphicContent,
@@ -1222,6 +1227,25 @@ app.delete(
     },
 );
 
+app.put("/admin/game-data/maps/:mapNum/canonical", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Numero de mapa invalido." });
+            return;
+        }
+
+        response.json(
+            await upsertGameMap(mapNum, request.body, authorized.session.account._id),
+        );
+    } catch (error) {
+        response.status(400).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
 app.get(
     "/internal/game-data/objects",
     requireAuth,
@@ -1320,6 +1344,36 @@ app.get("/internal/game-data/npcs", requireAuth, async (request, response) => {
         response.status(500).json({
             error: error instanceof Error ? error.message : "Unexpected error",
         });
+    }
+});
+
+app.get("/internal/game-data/maps/changes", requireAuth, async (request, response) => {
+    try {
+        const sinceVersion = Number.parseInt(new URL(request.url).searchParams.get("sinceVersion") ?? "0", 10);
+        response.json(await listGameMapChangesSince(Number.isInteger(sinceVersion) ? sinceVersion : 0));
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+    }
+});
+
+app.get("/internal/game-data/maps/:id", requireAuth, async (request, response) => {
+    try {
+        const rawId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id;
+        const id = Number.parseInt(rawId ?? "", 10);
+        if (!Number.isInteger(id) || id <= 0) {
+            response.status(400).json({ error: "Id de mapa invalido." });
+            return;
+        }
+
+        const map = await getGameMapById(id);
+        if (!map) {
+            response.status(404).json({ error: "Mapa no encontrado." });
+            return;
+        }
+
+        response.json(map);
+    } catch (error) {
+        response.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
     }
 });
 

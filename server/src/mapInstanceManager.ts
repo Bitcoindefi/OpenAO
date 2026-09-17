@@ -1,5 +1,6 @@
 import type { RuntimeCharacter } from "./types/runtime";
 import { loadMapNpcPlacements } from "./mapNpcStorage";
+const { mergeNpcPlacements } = require("./mapOverrideSync");
 
 export {};
 
@@ -73,7 +74,15 @@ const mapInstanceManager = {
     spawnMapNpcs(baseMapId: number, targetMapId: number) {
         const game = getGame();
         const login = getLogin();
-        const entries = [...loadMapNpcPlacements(baseMapId), ...getExtraNpcEntries(baseMapId)];
+        const entries = [
+            ...mergeNpcPlacements(
+                loadMapNpcPlacements(baseMapId),
+                vars.publishedMapNpcPlacements?.filter(
+                    (placement: any) => placement.mapNum === baseMapId,
+                ),
+            ),
+            ...getExtraNpcEntries(baseMapId),
+        ];
 
         for (const entry of entries) {
             const datNpc = vars.datNpc[entry.npcIndex];
