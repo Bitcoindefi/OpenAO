@@ -4,13 +4,21 @@ import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
 import pool from "../db";
+import {
+    UPLOADED_GRAPHIC_INDEX_START as CATALOG_UPLOADED_START,
+} from "../lib/graphicCatalog";
 import { validatePngUpload } from "../lib/pngValidation";
+import {
+    assertGraphicsExist,
+    listPaletteOverrides,
+} from "./worldBuilderPalette";
 
 /**
- * Los indices originales del juego llegan hasta 320151. El rango de graficos
- * subidos arranca muy por encima para que no puedan colisionar nunca.
+ * Los indices originales del juego llegan hasta ~320151. El rango de graficos
+ * subidos arranca en 1_000_000 para que no puedan colisionar nunca.
+ * Fuente de verdad compartida con graphicCatalog / frontend gameLoader.
  */
-export const UPLOADED_GRAPHIC_INDEX_START = 1_000_000;
+export const UPLOADED_GRAPHIC_INDEX_START = CATALOG_UPLOADED_START;
 
 /** Los mapas del juego son de 100x100. */
 export const MAP_SIZE = 100;
@@ -249,22 +257,10 @@ export async function paintTiles(
         await client.query("BEGIN");
 
         for (const tile of tiles) {
-            // Un grafico referenciado tiene que existir: o es uno original del
-            // juego (por debajo del rango de subidos) o uno que subimos.
-            if (
-                tile.grhIndex != null &&
-                tile.grhIndex >= UPLOADED_GRAPHIC_INDEX_START
-            ) {
-                const exists = await client.query(
-                    `SELECT 1 FROM game_uploaded_graphics WHERE grh_index = $1 LIMIT 1`,
-                    [tile.grhIndex],
-                );
-
-                if (exists.rowCount === 0) {
-                    throw new Error(
-                        `El grafico ${tile.grhIndex} no existe. Subilo antes de usarlo.`,
-                    );
-                }
+            // Valida contra graficos.json (originales) y game_uploaded_graphics
+            // (subidos). Un ID "en rango" pero ausente del catalogo ya no pasa.
+            if (tile.grhIndex != null) {
+                await assertGraphicsExist([tile.grhIndex]);
             }
 
             await client.query(
@@ -673,7 +669,7 @@ export async function getMapTerrainPalette(
         palette?: Record<string, { blocked?: boolean; graphics?: unknown }>;
     };
 
-    const palette: TerrainPaletteEntry[] = [];
+    const byId = new Map<number, TerrainPaletteEntry>();
 
     for (const [id, entry] of Object.entries(terrain.palette ?? {})) {
         const parsedId = Number.parseInt(id, 10);
@@ -691,18 +687,56 @@ export async function getMapTerrainPalette(
             return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
         });
 
-        palette.push({
+        byId.set(parsedId, {
             id: parsedId,
             graphics,
             blocked: Boolean(entry.blocked),
         });
     }
 
-    palette.sort((left, right) => left.id - right.id);
+    // Overrides de paleta (#6): agregan o reemplazan entradas sin tocar el
+    // terrain.json fuente. Asi un PNG subido puede convertirse en brush
+    // reutilizable (capas + blocked) igual que un tile original.
+    for (const override of await listPaletteOverrides(mapNum)) {
+        byId.set(override.id, {
+            id: override.id,
+            graphics: override.graphics,
+            blocked: override.blocked,
+        });
+    }
+
+    const palette = [...byId.values()].sort((left, right) => left.id - right.id);
 
     return {
         mapNum,
         palette,
         uploadedGraphics: await listGraphics(MAX_PALETTE_UPLOADED_GRAPHICS),
     };
+}
+
+/** Maximo id de paleta en terrain.json (para asignar ids nuevos sin colision). */
+export async function getSourcePaletteMaxId(mapNum: number): Promise<number> {
+    const mapsSourceDir = resolveMapsSourceDir();
+    const terrainPath = path.join(
+        mapsSourceDir,
+        `mapa_${mapNum}`,
+        "terrain.json",
+    );
+
+    if (!existsSync(terrainPath)) {
+        return 0;
+    }
+
+    const terrain = JSON.parse(await fs.readFile(terrainPath, "utf8")) as {
+        palette?: Record<string, unknown>;
+    };
+
+    let maxId = 0;
+    for (const id of Object.keys(terrain.palette ?? {})) {
+        const parsed = Number.parseInt(id, 10);
+        if (Number.isInteger(parsed) && parsed > maxId) {
+            maxId = parsed;
+        }
+    }
+    return maxId;
 }
