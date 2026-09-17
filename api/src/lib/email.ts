@@ -10,8 +10,14 @@ type PasswordResetEmailInput = {
 let sesClient: SESv2Client | null = null;
 
 function getSesClient(): SESv2Client {
-  if (!config.sesRegion || !config.sesAccessKeyId || !config.sesSecretAccessKey || !config.sesFromEmail) {
-    throw new Error("Amazon SES no esta configurado");
+  const missing: string[] = [];
+  if (!config.sesRegion) missing.push("SES_REGION");
+  if (!config.sesAccessKeyId) missing.push("SES_ACCESS_KEY_ID");
+  if (!config.sesSecretAccessKey) missing.push("SES_SECRET_ACCESS_KEY");
+  if (!config.sesFromEmail) missing.push("SES_FROM_EMAIL");
+
+  if (missing.length > 0) {
+    throw new Error(`Amazon SES no esta configurado. Faltan variables: ${missing.join(", ")}`);
   }
 
   if (!sesClient) {
