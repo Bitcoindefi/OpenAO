@@ -8,6 +8,7 @@ import {
 import { resolveMapsSourceDir } from "./repositories/worldBuilder";
 import { isValidGameNpcIndex } from "./repositories/gameNpcs";
 import express from "express";
+import { registerMapExitRoutes } from "./routes/mapExitRoutes";
 import config from "./config";
 import pool from "./db";
 import { requireAuth } from "./middleware/auth";
@@ -753,6 +754,13 @@ app.put("/admin/game-data/balance", async (request, response) => {
             error instanceof Error ? error.message : "Unexpected error";
         response.status(400).json({ error: message });
     }
+});
+
+
+registerMapExitRoutes(app, {
+    requireAdmin: async (request, response) => {
+        return requireAdminEmailSession(request, response);
+    },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
