@@ -209,6 +209,7 @@ interface MapRendererProps {
     onAdminOverviewSnapshot?: (snapshot: PanelSnapshot) => void;
     onCharacterStatsSnapshot?: (snapshot: CharacterStatsSnapshot) => void;
     onPerformanceSample?: (sample: PerformanceSample) => void;
+    onEditorTileClick?: (tile: { x: number; y: number }) => boolean;
 }
 
 interface ManualConnectionConfig {
@@ -704,6 +705,7 @@ export default function MapRenderer({
     onAdminOverviewSnapshot,
     onCharacterStatsSnapshot,
     onPerformanceSample,
+    onEditorTileClick,
 }: MapRendererProps) {
     const canvasRef = useRef<HTMLDivElement>(null);
     const rendererRootRef = useRef<HTMLDivElement>(null);
@@ -1756,6 +1758,7 @@ export default function MapRenderer({
         updateEntityFXPositions,
         debugCombatOverlayTextRef,
         setInspectedNpc,
+        onEditorTileClick,
     });
 
     const handleSessionPacketRef = useRef<

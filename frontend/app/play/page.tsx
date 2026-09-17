@@ -4,6 +4,9 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Maximize2, Minimize2 } from "lucide-react";
+import ContentBrowser, {
+    type EditorSelection,
+} from "../../components/game/editor/ContentBrowser";
 import React, {
     Suspense,
     useCallback,
@@ -696,6 +699,9 @@ function HomeContent() {
     const [activeConnection, setActiveConnection] =
         useState<ConnectionForm | null>(null);
     const [hud, setHud] = useState<PlayerHudState | null>(null);
+    const [editorSelection, setEditorSelection] =
+        useState<EditorSelection | null>(null);
+    const [editorStatus, setEditorStatus] = useState("");
     const [equipRequest, setEquipRequest] = useState<EquipRequest | null>(null);
     const [useItemClickRequest, setUseItemClickRequest] =
         useState<UseRequest | null>(null);
@@ -2709,6 +2715,19 @@ function HomeContent() {
                         className="flex items-start"
                         style={{ gap: `${HUD_GAP}px` }}
                     >
+                        {hud?.privileges === 1 ? (
+                            <ContentBrowser
+                                mapNumber={selectedMap}
+                                onSelect={(selection) => {
+                                    setEditorSelection(selection);
+                                    setEditorStatus(
+                                        selection
+                                            ? `${selection.name} seleccionado`
+                                            : "",
+                                    );
+                                }}
+                            />
+                        ) : null}
                         <div
                             className="flex flex-col"
                             style={{
@@ -2785,7 +2804,62 @@ function HomeContent() {
                                         setCharacterStatsLoading(false);
                                         setCharacterStatsOpen(true);
                                     }}
+                                    onEditorTileClick={({ x, y }) => {
+                                        if (!editorSelection) return false;
+                                        if (editorSelection.kind === "npc") {
+                                            setChatRequest((current) => ({
+                                                message: `/invocarnpc ${editorSelection.id} guardar ${x} ${y}`,
+                                                token: (current?.token ?? 0) + 1,
+                                            }));
+                                            setEditorStatus(
+                                                `${editorSelection.name} enviado para ${x},${y}`,
+                                            );
+                                            return true;
+                                        }
+                                        if (editorSelection.kind === "object") {
+                                            setChatRequest((current) => ({
+                                                message: `/colocarobjeto ${editorSelection.id} ${x} ${y}`,
+                                                token: (current?.token ?? 0) + 1,
+                                            }));
+                                            setEditorStatus(
+                                                `Objeto #${editorSelection.id} enviado para ${x},${y}; no persiste al reiniciar hasta #9`,
+                                            );
+                                            return true;
+                                        }
+                                        void fetch(
+                                            `/api/admin/game-data/maps/${selectedMap}/tiles`,
+                                            {
+                                                method: "PUT",
+                                                headers: {
+                                                    "Content-Type": "application/json",
+                                                },
+                                                body: JSON.stringify({
+                                                    tiles: [
+                                                        {
+                                                            x,
+                                                            y,
+                                                            layer: editorSelection.layer,
+                                                            grhIndex:
+                                                                editorSelection.graphicId,
+                                                        },
+                                                    ],
+                                                }),
+                                            },
+                                        ).then((response) =>
+                                            setEditorStatus(
+                                                response.ok
+                                                    ? `${editorSelection.name} pintado en ${x},${y}`
+                                                    : `No se pudo pintar ${x},${y}`,
+                                            ),
+                                        );
+                                        return true;
+                                    }}
                                 />
+                                {editorStatus ? (
+                                    <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded-md border border-emerald-500/40 bg-slate-950/95 px-3 py-2 text-xs text-emerald-200 shadow-lg">
+                                        {editorStatus}
+                                    </div>
+                                ) : null}
 
                                 {!arenaMode &&
                                 logoutPending &&
