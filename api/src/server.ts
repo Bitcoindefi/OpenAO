@@ -11,6 +11,7 @@ import express from "express";
 import config from "./config";
 import pool from "./db";
 import { requireAuth } from "./middleware/auth";
+import { registerGameMapRoutes } from "./routes/gameMapsRoutes";
 import {
     confirmPasswordReset,
     consumeGameTicket,
@@ -753,6 +754,12 @@ app.put("/admin/game-data/balance", async (request, response) => {
             error instanceof Error ? error.message : "Unexpected error";
         response.status(400).json({ error: message });
     }
+});
+
+
+registerGameMapRoutes(app, {
+    requireAuth,
+    requireAdminEmailSession,
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
