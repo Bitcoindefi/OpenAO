@@ -14,6 +14,7 @@ import React, {
     useState,
 } from "react";
 import { MapRenderer } from "../../components/game";
+import InGameMapEditor from "../../components/editor/InGameMapEditor";
 import AdminIntervalsModal from "../../components/AdminIntervalsModal";
 import BuffStatusSidebar from "../../components/BuffStatusSidebar";
 import InventoryFloatingPanel from "../../components/InventoryFloatingPanel";
@@ -688,6 +689,8 @@ function HomeContent() {
     const [selectedMap, setSelectedMap] = useState(
         () => selectedCharacter?.map ?? 1,
     );
+    const [mapEditOpen, setMapEditOpen] = useState(false);
+    const [playersOnMap, setPlayersOnMap] = useState(0);
     const [form, setForm] = useState<ConnectionForm>({
         wsUrl: DEFAULT_WS_URL,
         ticket: "",
@@ -2785,6 +2788,22 @@ function HomeContent() {
                                         setCharacterStatsLoading(false);
                                         setCharacterStatsOpen(true);
                                     }}
+                                    suppressGameplayInput={mapEditOpen}
+                                    onPlayersOnMapChange={setPlayersOnMap}
+                                />
+                                <InGameMapEditor
+                                    mapNum={selectedMap}
+                                    open={mapEditOpen}
+                                    onOpenChange={setMapEditOpen}
+                                    playersOnMap={playersOnMap}
+                                    canvasWidth={
+                                        hudLayout.canvasWidth ??
+                                        CANVAS_BASE_WIDTH
+                                    }
+                                    canvasHeight={
+                                        hudLayout.canvasHeight ??
+                                        CANVAS_BASE_HEIGHT
+                                    }
                                 />
 
                                 {!arenaMode &&

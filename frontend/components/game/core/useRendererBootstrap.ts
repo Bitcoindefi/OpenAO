@@ -112,6 +112,7 @@ type UseRendererBootstrapOptions = {
     playStepSound: (engine: any, entityId: number) => void;
     renderRemoteEntity: (engine: any, entity: any) => Promise<void>;
     canProcessMovementInput: () => boolean;
+    suppressGameplayInputRef?: RefObject<boolean>;
     recordClientGameAction: (
         action: string,
         details?: Record<string, unknown>,
@@ -449,6 +450,10 @@ export function useRendererBootstrap(options: UseRendererBootstrapOptions) {
                 };
 
                 mapContainer.on("pointerdown", (event) => {
+                    if (options.suppressGameplayInputRef?.current) {
+                        return;
+                    }
+
                     const interaction = getInteractionContext(event);
                     if (!interaction) {
                         return;

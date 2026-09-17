@@ -13,11 +13,19 @@ import {
 
 type EditorAction = "publish" | "discard" | "revert";
 
+type EditorToolbarProps = {
+    playersOnMap?: number;
+    showMapInput?: boolean;
+};
+
 /**
  * Barra de herramientas del editor: seleccion de herramienta, accion de
  * borrado y acciones de publicar / descartar / revertir cambios.
  */
-export default function EditorToolbar() {
+export default function EditorToolbar({
+    playersOnMap,
+    showMapInput = true,
+}: EditorToolbarProps) {
     const {
         mapNum,
         setMapNum,
@@ -137,30 +145,37 @@ export default function EditorToolbar() {
 
     return (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-stone-950/70 px-4 py-3 backdrop-blur-md">
-            <div className="flex items-center gap-1.5">
-                <label
-                    htmlFor="editor-map-input"
-                    className="text-[11px] text-stone-400"
-                >
-                    Mapa
-                </label>
-                <input
-                    id="editor-map-input"
-                    type="number"
-                    min={1}
-                    value={mapNum}
-                    onChange={(event) => {
-                        const nextValue = Number(event.target.value);
+            {showMapInput ? (
+                <>
+                    <div className="flex items-center gap-1.5">
+                        <label
+                            htmlFor="editor-map-input"
+                            className="text-[11px] text-stone-400"
+                        >
+                            Mapa
+                        </label>
+                        <input
+                            id="editor-map-input"
+                            type="number"
+                            min={1}
+                            value={mapNum}
+                            onChange={(event) => {
+                                const nextValue = Number(event.target.value);
 
-                        if (Number.isInteger(nextValue) && nextValue > 0) {
-                            setMapNum(nextValue);
-                        }
-                    }}
-                    className="w-20 rounded-lg border border-white/10 bg-stone-950/60 px-2 py-1 text-xs text-stone-200 focus:border-amber-400/50 focus:outline-none"
-                />
-            </div>
+                                if (
+                                    Number.isInteger(nextValue) &&
+                                    nextValue > 0
+                                ) {
+                                    setMapNum(nextValue);
+                                }
+                            }}
+                            className="w-20 rounded-lg border border-white/10 bg-stone-950/60 px-2 py-1 text-xs text-stone-200 focus:border-amber-400/50 focus:outline-none"
+                        />
+                    </div>
 
-            <div className="mx-2 h-6 w-px bg-white/10" />
+                    <div className="mx-2 h-6 w-px bg-white/10" />
+                </>
+            ) : null}
 
             <div className="flex items-center gap-1">
                 {toolButtons.map((button) => (
@@ -250,6 +265,7 @@ export default function EditorToolbar() {
                     draftEntities={draftEntities}
                     publishedTiles={publishedTiles}
                     publishedEntities={publishedEntities}
+                    playersOnMap={playersOnMap}
                     onCancel={() => setPendingAction(null)}
                     onConfirm={() => {
                         const action = pendingAction;
@@ -275,6 +291,7 @@ function ConfirmDialog({
     draftEntities,
     publishedTiles,
     publishedEntities,
+    playersOnMap,
     onCancel,
     onConfirm,
 }: {
@@ -284,6 +301,7 @@ function ConfirmDialog({
     draftEntities: number;
     publishedTiles: number;
     publishedEntities: number;
+    playersOnMap?: number;
     onCancel: () => void;
     onConfirm: () => void;
 }) {
@@ -302,7 +320,10 @@ function ConfirmDialog({
     const copy = {
         publish: {
             title: `Publicar los cambios del mapa ${mapNum}`,
-            body: `Los jugadores van a ver ${draftTiles} tiles y ${draftEntities} entidades en cuanto entren al mapa. Publicar no se puede deshacer desde aca: para volver atras hay que revertir el mapa entero.`,
+            body:
+                playersOnMap == null
+                    ? `Los jugadores van a ver ${draftTiles} tiles y ${draftEntities} entidades en cuanto entren al mapa. Publicar no se puede deshacer desde aca: para volver atras hay que revertir el mapa entero.`
+                    : `Hay ${playersOnMap} jugador${playersOnMap === 1 ? "" : "es"} en el mapa ahora. Los jugadores van a ver ${draftTiles} tiles y ${draftEntities} entidades en cuanto entren. Publicar no se puede deshacer desde aca: para volver atras hay que revertir el mapa entero.`,
             confirmLabel: "Publicar",
             confirmClass:
                 "border-emerald-400/50 bg-emerald-400/15 text-emerald-200 hover:bg-emerald-400/25",

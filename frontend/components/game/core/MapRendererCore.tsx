@@ -209,6 +209,8 @@ interface MapRendererProps {
     onAdminOverviewSnapshot?: (snapshot: PanelSnapshot) => void;
     onCharacterStatsSnapshot?: (snapshot: CharacterStatsSnapshot) => void;
     onPerformanceSample?: (sample: PerformanceSample) => void;
+    suppressGameplayInput?: boolean;
+    onPlayersOnMapChange?: (count: number) => void;
 }
 
 interface ManualConnectionConfig {
@@ -704,6 +706,8 @@ export default function MapRenderer({
     onAdminOverviewSnapshot,
     onCharacterStatsSnapshot,
     onPerformanceSample,
+    suppressGameplayInput = false,
+    onPlayersOnMapChange,
 }: MapRendererProps) {
     const canvasRef = useRef<HTMLDivElement>(null);
     const rendererRootRef = useRef<HTMLDivElement>(null);
@@ -790,6 +794,8 @@ export default function MapRenderer({
         ) => void
     >(() => {});
     const [isAdminUi, setIsAdminUi] = React.useState(false);
+    const suppressGameplayInputRef = useRef(suppressGameplayInput);
+    const onPlayersOnMapChangeRef = useRef(onPlayersOnMapChange);
 
     const flushPendingChatRequest = () => {
         const pendingChatRequest = latestChatRequestRef.current;
@@ -1312,6 +1318,47 @@ export default function MapRenderer({
         mergeHud,
     });
 
+    useEffect(() => {
+        suppressGameplayInputRef.current = suppressGameplayInput;
+        onPlayersOnMapChangeRef.current = onPlayersOnMapChange;
+    }, [onPlayersOnMapChange, suppressGameplayInput]);
+
+    const canProcessMovementInputUnlessEditing = React.useCallback(() => {
+        if (suppressGameplayInput) {
+            return false;
+        }
+
+        return canProcessMovementInput();
+    }, [canProcessMovementInput, suppressGameplayInput]);
+
+    useEffect(() => {
+        if (suppressGameplayInput) {
+            clearMovementInputState(engineRef.current);
+        }
+    }, [clearMovementInputState, suppressGameplayInput]);
+
+    useEffect(() => {
+        const reportPlayersOnMap = () => {
+            const notify = onPlayersOnMapChangeRef.current;
+
+            if (!notify) {
+                return;
+            }
+
+            const engine = engineRef.current;
+            const count = engine
+                ? Object.values(engine.personajes).filter(
+                      (character) => character && !character.isNpc,
+                  ).length
+                : 0;
+            notify(count);
+        };
+
+        reportPlayersOnMap();
+        const intervalId = window.setInterval(reportPlayersOnMap, 1000);
+        return () => window.clearInterval(intervalId);
+    }, []);
+
     useKeyboardGameplay({
         isMounted,
         engineRef,
@@ -1321,7 +1368,7 @@ export default function MapRenderer({
         movementKeyMapRef,
         movementPressCountsRef,
         movementKeyPriorityRef,
-        canProcessMovementInput,
+        canProcessMovementInput: canProcessMovementInputUnlessEditing,
         clearMovementInputState,
         clearTargetingMode,
         hasEquippedMeleeWeapon,
@@ -1737,7 +1784,8 @@ export default function MapRenderer({
         mergeHud,
         playStepSound,
         renderRemoteEntity,
-        canProcessMovementInput,
+        canProcessMovementInput: canProcessMovementInputUnlessEditing,
+        suppressGameplayInputRef,
         recordClientGameAction,
         canStartLocalCombatAction,
         registerLocalCombatAction,
