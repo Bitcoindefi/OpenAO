@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
     CLIENT_PACKET_ID,
     createConnectCharacterPacket,
@@ -9,6 +9,10 @@ import {
 import { setTextIfChanged } from "../rendering/textStyles";
 import { getSmoothedPingDisplay } from "../network/ping";
 import { parseQueuedSocketMessage } from "../network/packetQueue";
+
+const RECONNECT_MAX_ATTEMPTS = 5;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 16000;
 
 type ManualConnectionConfig = {
     wsUrl: string;
@@ -122,6 +126,8 @@ export function useGameSession({
     characterStatsChunkTotalRef,
     onPacket,
 }: UseGameSessionOptions) {
+    const [reconnectAttempt, setReconnectAttempt] = useState(0);
+    const connectionSessionKey = connection?.sessionKey ?? "";
     const emitHudRef = useRef(emitHud);
     const emitStatusRef = useRef(emitStatus);
     const emitTradeStateRef = useRef(emitTradeState);
@@ -217,6 +223,10 @@ export function useGameSession({
     useEffect(() => {
         onPingSampleRef.current = onPingSample;
     }, [onPingSample]);
+
+    useEffect(() => {
+        setReconnectAttempt(0);
+    }, [connectionSessionKey]);
 
     useEffect(() => {
         const socketInstanceId = activeSocketInstanceRef.current + 1;
@@ -487,6 +497,23 @@ export function useGameSession({
             });
         };
 
+        let reconnectTimer: number | null = null;
+
+        const scheduleReconnect = () => {
+            if (reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
+                return;
+            }
+
+            const delay = Math.min(
+                RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt,
+                RECONNECT_MAX_DELAY_MS,
+            );
+
+            reconnectTimer = window.setTimeout(() => {
+                setReconnectAttempt(reconnectAttempt + 1);
+            }, delay);
+        };
+
         socket.onclose = (event) => {
             clearPing();
             if (
@@ -501,10 +528,15 @@ export function useGameSession({
                     connecting: false,
                     error: closeReason || previousError || "Conexion cerrada.",
                 });
+                scheduleReconnect();
             }
         };
 
         return () => {
+            if (reconnectTimer !== null) {
+                window.clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
             if (
                 activeSessionKeyRef.current === connection.sessionKey &&
                 isCurrentSocketInstance(socket)
@@ -553,6 +585,7 @@ export function useGameSession({
         pingIntervalRef,
         pingTextRef,
         recentPingSamplesRef,
+        reconnectAttempt,
         websocketRef,
     ]);
 }
