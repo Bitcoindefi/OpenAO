@@ -39,6 +39,8 @@
         "test:connection-policy": "tsx src/scripts/testConnectionPolicy.ts",
         "start": "node dist/server.js",
         "lint": "eslint \"./src/**/*.ts\"",
+        "worldeditor-maps": "tsx src/scripts/worldEditorMapImportExport.ts",
+        "test:worldeditor-maps": "tsx --test src/tests/worldEditorMapConverter.test.ts",
         "world-map": "node scripts/build-world-map.cjs",
         "compare-original-data": "tsx src/scripts/compareOriginalData.ts"
     },
