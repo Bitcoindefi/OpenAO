@@ -70,3 +70,50 @@ html.game-targeting body *::after {
         -webkit-overflow-scrolling: touch;
     }
 }
+
+/* Mobile-specific: landscape rotation prompt */
+@media (orientation: portrait) and (max-width: 768px) {
+    .game-shell .mobile-landscape-overlay {
+        display: flex;
+    }
+}
+
+@media (orientation: landscape) and (max-width: 768px) {
+    .game-shell .mobile-landscape-overlay {
+        display: none;
+    }
+}
+
+/* Hide joystick on desktop */
+@media (pointer: coarse) {
+    .mobile-only-joystick {
+        display: block;
+    }
+}
+
+@media (pointer: fine) {
+    .mobile-only-joystick {
+        display: none;
+    }
+}
+
+/* Responsive canvas scaling */
+@media screen and (max-width: 768px) {
+    .game-shell {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        -webkit-overflow-scrolling: touch;
+        overflow: hidden;
+    }
+
+    .game-shell canvas,
+    .game-shell [class*="canvas-"] {
+        max-width: 100vw;
+        max-height: 100vh;
+        width: auto;
+        height: auto;
+    }
+}

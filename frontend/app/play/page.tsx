@@ -68,6 +68,7 @@ import {
 } from "../../lib/viewport";
 
 const DEFAULT_WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:7666";
+import LandscapePrompt from "../../components/game/input/LandscapePrompt";
 const OverviewModal = dynamic(() => import("../../components/OverviewModal"), {
     ssr: false,
 });
@@ -3857,6 +3858,7 @@ export default function Home() {
     return (
         <Suspense fallback={<main className="min-h-screen bg-black" />}>
             <HomeContent />
-        </Suspense>
+        <LandscapePrompt />
+            </Suspense>
     );
 }

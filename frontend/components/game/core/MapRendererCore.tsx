@@ -69,6 +69,8 @@ import { useAssetPipeline } from "./useAssetPipeline";
 import { useMovementSync, type LocalPendingMove } from "./useMovementSync";
 import { useCombatController, type TargetingMode } from "./useCombatController";
 import { useKeyboardGameplay } from "./useKeyboardGameplay";
+import { useTouchGameplay } from "./useTouchGameplay";
+import Joystick from "../input/Joystick";
 import { useNpcAdminTools } from "./useNpcAdminTools";
 import { useHudStateController } from "./useHudStateController";
 import { useSceneController } from "./useSceneController";
@@ -1333,6 +1335,18 @@ export default function MapRenderer({
         setIsDebugMode,
     });
 
+    const {
+        onJoystickMove,
+        onJoystickMoveEnd,
+    } = useTouchGameplay({
+        isMounted,
+        engineRef,
+        movementKeyPriorityRef,
+        movementPressCountsRef,
+        canProcessMovementInput,
+        syncMovementState,
+    });
+
     const { clearUseItemQueues } = useOutgoingRequests({
         websocketRef,
         engineRef,
@@ -2072,6 +2086,12 @@ export default function MapRenderer({
                         )
                     }
                 />
+            </div>
+            <div className="mobile-only-joystick">
+            <Joystick
+                onMove={onJoystickMove}
+                onMoveEnd={onJoystickMoveEnd}
+            />
             </div>
         </div>
     );
