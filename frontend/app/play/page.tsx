@@ -182,6 +182,14 @@ type RendererStatus = {
     worldName?: string;
     error?: string;
     consoleLine?: string;
+    reconnectPhase?:
+        | "idle"
+        | "scheduled"
+        | "connecting"
+        | "exhausted"
+        | "cancelled";
+    reconnectAttempt?: number;
+    reconnectMaxAttempts?: number;
 };
 
 type ConnectionForm = {
@@ -695,6 +703,10 @@ function HomeContent() {
     const [connectionSeed, setConnectionSeed] = useState(0);
     const [activeConnection, setActiveConnection] =
         useState<ConnectionForm | null>(null);
+    const [reconnectCommand, setReconnectCommand] = useState<{
+        type: "cancel" | "retry";
+        nonce: number;
+    } | null>(null);
     const [hud, setHud] = useState<PlayerHudState | null>(null);
     const [equipRequest, setEquipRequest] = useState<EquipRequest | null>(null);
     const [useItemClickRequest, setUseItemClickRequest] =
@@ -1624,8 +1636,119 @@ function HomeContent() {
         setShowFullscreenPrompt(false);
     }, []);
 
+    const refreshConnectionCredentials = useCallback(async () => {
+        if (arenaMode && arenaRoomId) {
+            const roomResponse = await fetch(
+                `/api/arenas/rooms/${arenaRoomId}`,
+                {
+                    cache: "no-store",
+                },
+            );
+            const roomResult = (await roomResponse.json()) as
+                | ArenaRoomDetails
+                | AuthErrorResponse;
+
+            if (!roomResponse.ok || "error" in roomResult) {
+                throw new Error(
+                    "error" in roomResult
+                        ? roomResult.error
+                        : "No se pudo recuperar la sala",
+                );
+            }
+
+            const templateId = roomResult.member?.selectedPvpTemplateId;
+            if (templateId === null || templateId === undefined) {
+                throw new Error("No hay plantilla seleccionada en la arena");
+            }
+
+            const ticketResponse = await fetch(
+                `/api/arenas/rooms/${arenaRoomId}/select-template`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ templateId }),
+                },
+            );
+            const ticketResult = (await ticketResponse.json()) as
+                | ArenaGameTicketResponse
+                | AuthErrorResponse;
+
+            if (!ticketResponse.ok || "error" in ticketResult) {
+                throw new Error(
+                    "error" in ticketResult
+                        ? ticketResult.error
+                        : "No se pudo regenerar el ticket de arena",
+                );
+            }
+
+            setForm((current) => ({
+                ...current,
+                ticket: ticketResult.ticket,
+            }));
+
+            return {
+                wsUrl: form.wsUrl,
+                ticket: ticketResult.ticket,
+                typeGame: 2 as const,
+                idChar: templateId,
+            };
+        }
+
+        if (arenaMode && arenaTicket) {
+            // Query-string arena tickets cannot be regenerated here; reuse while valid.
+            return {
+                wsUrl: form.wsUrl,
+                ticket: arenaTicket,
+                typeGame: 2,
+                idChar: Number.isFinite(arenaTemplateId) ? arenaTemplateId : 0,
+            };
+        }
+
+        const response = await fetch("/api/auth/game-ticket", {
+            method: "POST",
+        });
+        const result = (await response.json()) as
+            | GameTicketResponse
+            | AuthErrorResponse;
+
+        if (!response.ok || "error" in result) {
+            throw new Error(
+                "error" in result
+                    ? result.error
+                    : "No se pudo crear el ticket de juego",
+            );
+        }
+
+        setForm((current) => ({
+            ...current,
+            ticket: result.ticket,
+        }));
+
+        return {
+            wsUrl: form.wsUrl,
+            ticket: result.ticket,
+        };
+    }, [
+        arenaMode,
+        arenaRoomId,
+        arenaTicket,
+        arenaTemplateId,
+        form.wsUrl,
+    ]);
+
+    const requestReconnectCancel = useCallback(() => {
+        setReconnectCommand({ type: "cancel", nonce: Date.now() });
+    }, []);
+
+    const requestReconnectRetry = useCallback(() => {
+        setReconnectCommand({ type: "retry", nonce: Date.now() });
+    }, []);
+
     const resetConnectionState = useCallback(() => {
         autoConnectKeyRef.current = null;
+        setReconnectCommand(null);
         setLogoutPending(false);
         setLogoutDeadline(null);
         setLogoutSecondsRemaining(0);
@@ -1665,6 +1788,9 @@ function HomeContent() {
             worldName: undefined,
             error: undefined,
             consoleLine: undefined,
+            reconnectPhase: "idle",
+            reconnectAttempt: undefined,
+            reconnectMaxAttempts: undefined,
         });
     }, []);
 
@@ -2733,6 +2859,10 @@ function HomeContent() {
                                     width={hudLayout.canvasWidth}
                                     height={hudLayout.canvasHeight}
                                     connection={connection}
+                                    refreshConnectionCredentials={
+                                        refreshConnectionCredentials
+                                    }
+                                    reconnectCommand={reconnectCommand}
                                     equipRequest={equipRequest}
                                     useItemClickRequest={useItemClickRequest}
                                     useItemURequest={useItemURequest}
@@ -3792,7 +3922,27 @@ function HomeContent() {
 
             {status.error || fullscreenError ? (
                 <div className="fixed left-4 top-24 z-50 max-w-sm rounded-2xl bg-stone-950/88 px-4 py-3 text-sm text-rose-300 shadow-2xl backdrop-blur-md">
-                    {status.error || fullscreenError}
+                    <p>{status.error || fullscreenError}</p>
+                    {status.reconnectPhase === "scheduled" ||
+                    status.reconnectPhase === "connecting" ? (
+                        <button
+                            type="button"
+                            onClick={requestReconnectCancel}
+                            className="mt-3 rounded-full border border-white/15 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-stone-200 transition hover:border-amber-300/40 hover:text-white"
+                        >
+                            Cancelar reconexion
+                        </button>
+                    ) : null}
+                    {status.reconnectPhase === "exhausted" ||
+                    status.reconnectPhase === "cancelled" ? (
+                        <button
+                            type="button"
+                            onClick={requestReconnectRetry}
+                            className="mt-3 rounded-full border border-amber-300/35 bg-amber-300/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-amber-100 transition hover:border-amber-200/60 hover:bg-amber-300/20"
+                        >
+                            Reconectar
+                        </button>
+                    ) : null}
                 </div>
             ) : null}
 
