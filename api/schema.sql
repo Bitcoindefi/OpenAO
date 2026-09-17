@@ -652,3 +652,97 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+
+-- OpenAO #25: proposal/moderation flow for user maps (Etapa 5).
+-- Depends on user map space (#24). Creates a lean user_maps ledger if absent so
+-- moderation can ship ahead of/alongside that PR, then adds review queue state,
+-- mandatory rejection reasons, community reports, and a moderator roster.
+-- Differentiator vs kitchen-sink in-memory stubs: durable Postgres state + BFS
+-- reachability pre-checks + HTTP preview/queue APIs, scoped to api/.
+
+CREATE TABLE IF NOT EXISTS user_maps (
+    map_num INTEGER PRIMARY KEY
+        CHECK (map_num BETWEEN 600 AND 999),
+    owner_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN (
+            'draft', 'proposed', 'in_review', 'published', 'rejected', 'archived'
+        )),
+    npc_count INTEGER NOT NULL DEFAULT 0 CHECK (npc_count >= 0),
+    object_count INTEGER NOT NULL DEFAULT 0 CHECK (object_count >= 0),
+    asset_bytes BIGINT NOT NULL DEFAULT 0 CHECK (asset_bytes >= 0),
+    allow_combat BOOLEAN NOT NULL DEFAULT FALSE,
+    allow_exp BOOLEAN NOT NULL DEFAULT FALSE,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    rejection_reason TEXT,
+    proposed_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+    reviewer_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    automated_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_maps_owner
+    ON user_maps(owner_account_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_maps_status
+    ON user_maps(status);
+
+-- Widen status check if an earlier #24 install only allowed draft/proposed/published/archived.
+DO $widen_user_maps_status$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'user_maps'
+    ) THEN
+        ALTER TABLE user_maps DROP CONSTRAINT IF EXISTS user_maps_status_check;
+        ALTER TABLE user_maps
+            ADD CONSTRAINT user_maps_status_check
+            CHECK (status IN (
+                'draft', 'proposed', 'in_review', 'published', 'rejected', 'archived'
+            ));
+        ALTER TABLE user_maps ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+        ALTER TABLE user_maps ADD COLUMN IF NOT EXISTS proposed_at TIMESTAMPTZ;
+        ALTER TABLE user_maps ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+        ALTER TABLE user_maps ADD COLUMN IF NOT EXISTS reviewer_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL;
+        ALTER TABLE user_maps ADD COLUMN IF NOT EXISTS automated_flags JSONB NOT NULL DEFAULT '[]'::jsonb;
+    END IF;
+END
+$widen_user_maps_status$;
+
+CREATE TABLE IF NOT EXISTS map_moderators (
+    account_id UUID PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+    added_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_map_reports (
+    id BIGSERIAL PRIMARY KEY,
+    map_num INTEGER NOT NULL REFERENCES user_maps(map_num) ON DELETE CASCADE,
+    reporter_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL CHECK (char_length(trim(reason)) >= 3),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (map_num, reporter_account_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_map_reports_map
+    ON user_map_reports(map_num, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_map_review_events (
+    id BIGSERIAL PRIMARY KEY,
+    map_num INTEGER NOT NULL REFERENCES user_maps(map_num) ON DELETE CASCADE,
+    actor_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    action TEXT NOT NULL CHECK (action IN (
+        'propose', 'claim', 'approve', 'reject', 'report', 'unpublish', 'repropose'
+    )),
+    from_status TEXT,
+    to_status TEXT,
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_map_review_events_map
+    ON user_map_review_events(map_num, created_at DESC);

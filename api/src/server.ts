@@ -8,6 +8,8 @@ import {
 import { resolveMapsSourceDir } from "./repositories/worldBuilder";
 import { isValidGameNpcIndex } from "./repositories/gameNpcs";
 import express from "express";
+import { registerMapModerationRoutes } from "./routes/mapModerationRoutes";
+import { isMapModerator } from "./repositories/mapModeration";
 import config from "./config";
 import pool from "./db";
 import { requireAuth } from "./middleware/auth";
@@ -753,6 +755,33 @@ app.put("/admin/game-data/balance", async (request, response) => {
             error instanceof Error ? error.message : "Unexpected error";
         response.status(400).json({ error: message });
     }
+});
+
+
+registerMapModerationRoutes(app, {
+    requireSession: async (request, response) => {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return null;
+        }
+        return authorized;
+    },
+    requireModerator: async (request, response) => {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return null;
+        }
+        const accountId = authorized.session.account._id;
+        const rostered = await isMapModerator(accountId);
+        const gameDataAdmin = isAuthorizedGameDataAdmin(authorized.session);
+        if (!rostered && !gameDataAdmin) {
+            response.status(403).json({ error: "Se requiere rol de moderador de mapas" });
+            return null;
+        }
+        return authorized;
+    },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
