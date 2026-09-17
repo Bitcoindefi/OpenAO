@@ -43,6 +43,7 @@ ENV NEXT_BUILD_ID=$NEXT_BUILD_ID
 ENV GAME_DATA_ADMIN_PROXY_TOKEN=$GAME_DATA_ADMIN_PROXY_TOKEN
 
 COPY packages/protocol /app/packages/protocol
+COPY server/mapas_source /app/server/mapas_source
 COPY frontend .
 RUN pnpm build
 

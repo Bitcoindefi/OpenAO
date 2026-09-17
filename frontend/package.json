@@ -4,13 +4,15 @@
     "private": true,
     "scripts": {
         "protocol:build": "pnpm exec tsc -p ../packages/protocol/tsconfig.json",
-        "predev": "pnpm run protocol:build",
+        "predev": "pnpm run protocol:build && node scripts/ensure-maps.mjs",
         "dev": "next dev --turbopack --hostname 0.0.0.0",
-        "prebuild": "pnpm run protocol:build",
+        "prebuild": "pnpm run protocol:build && node scripts/ensure-maps.mjs",
         "build": "next build",
         "start": "next start",
         "lint": "eslint",
-        "generate:headswithfile": "node ./scripts/generate-headswithfile.mjs"
+        "generate:headswithfile": "node ./scripts/generate-headswithfile.mjs",
+        "maps:ensure": "node scripts/ensure-maps.mjs",
+        "maps:export": "node scripts/ensure-maps.mjs --force"
     },
     "dependencies": {
         "@openao/protocol": "link:../packages/protocol",
