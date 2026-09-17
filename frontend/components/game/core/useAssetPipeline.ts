@@ -482,10 +482,18 @@ export function useAssetPipeline({
                 return;
             }
 
-            const nearbyMaps = collectAdjacentMapNumbers(
+            // Omitir prefetch si el usuario tiene modo ahorro de datos activo o conexión lenta
+            const nav = typeof navigator !== "undefined" ? (navigator as any) : null;
+            if (nav?.connection?.saveData || nav?.connection?.effectiveType === "2g") {
+                return;
+            }
+
+            const allNearbyMaps = collectAdjacentMapNumbers(
                 engine.mapData,
                 engine.mapNumber,
             );
+            // Tope de 2 mapas vecinos concurrentes para evitar agotar RAM y ancho de banda
+            const nearbyMaps = allNearbyMaps.slice(0, 2);
             if (!nearbyMaps.length) {
                 return;
             }
