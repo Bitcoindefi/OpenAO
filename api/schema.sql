@@ -174,8 +174,6 @@ ALTER TABLE clans
     ADD CONSTRAINT clans_alignment_check
     CHECK (alignment IN ('citizen', 'criminal'));
 
-
-
 ALTER TABLE characters
     ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
