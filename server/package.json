@@ -28,7 +28,7 @@
         "build": "pnpm run clean && tsc && node scripts/copy-assets.cjs",
         "predev": "pnpm run protocol:build",
         "dev": "NODE_ENV=development tsx watch src/server.ts",
-        "test": "tsx --test tests/**/*.test.ts",
+        "test": "tsx --test tests/**/*.test.ts src/tests/**/*.test.ts",
         "compact-objs": "tsx src/scripts/compactObjsJson.ts",
         "compact-npcs": "tsx src/scripts/compactNpcsJson.ts",
         "export-editable-maps": "tsx src/scripts/exportEditableMaps.ts",

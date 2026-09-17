@@ -175,6 +175,16 @@ class LoadMaps {
 
         console.log("Mapas Cargados.");
 
+        try {
+            const { initializeMapsFromApi } = require("./gameDataSync");
+            const result = await initializeMapsFromApi();
+            console.log(
+                `[GAME DATA] Mapas hidratados desde DB: ${result.loadedMapsWithOverrides} mapas con ${result.totalAppliedOverrides} overrides publicados.`,
+            );
+        } catch (error) {
+            console.error("[GAME DATA] Error al hidratar mapas desde DB:", error);
+        }
+
         const LoadNpcs = new loadNpcs();
         await LoadNpcs.initialize();
     }

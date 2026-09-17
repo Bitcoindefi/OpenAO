@@ -108,8 +108,10 @@ import {
     clearTile,
     discardDrafts,
     getGraphicContent,
+    getMapPublishVersion,
     getMapStatus,
     getMapTerrainPalette,
+    listAllPublishedMapOverrides,
     listGraphics,
     listMapOverrides,
     listMapTileEntities,
@@ -122,6 +124,7 @@ import {
     tileEntitySchema,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import { notifyGameServerMapPublish } from "./lib/notifyGameServerMapPublish";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -1035,9 +1038,18 @@ app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
             return;
         }
 
-        response.json(
-            await publishMap(mapNum, authorized.session.account._id),
+        const published = await publishMap(
+            mapNum,
+            authorized.session.account._id,
         );
+        const version = await getMapPublishVersion(mapNum);
+        const live = await notifyGameServerMapPublish(mapNum);
+
+        response.json({
+            ...published,
+            version,
+            liveReload: live,
+        });
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1651,6 +1663,47 @@ app.put(
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
             response.status(400).json({ error: message });
+        }
+    },
+);
+
+app.get(
+    "/internal/game-data/maps",
+    requireAuth,
+    async (_request, response) => {
+        try {
+            response.json(await listAllPublishedMapOverrides());
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(500).json({ error: message });
+        }
+    },
+);
+
+app.get(
+    "/internal/game-data/maps/:mapNum/overrides",
+    requireAuth,
+    async (request, response) => {
+        try {
+            const rawMapNum = Array.isArray(request.params.mapNum)
+                ? request.params.mapNum[0]
+                : request.params.mapNum;
+            const mapNum = Number.parseInt(rawMapNum ?? "", 10);
+            if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                return void response.status(400).json({ error: "mapNum invalido" });
+            }
+
+            const [overrides, version] = await Promise.all([
+                listMapOverrides(mapNum, false),
+                getMapPublishVersion(mapNum),
+            ]);
+
+            response.json({ mapNum, overrides, version });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(500).json({ error: message });
         }
     },
 );

@@ -21,6 +21,7 @@ type Config = {
   gameDataAdminEmail: string;
   gameDataAdminAccountId: string | null;
   gameDataAdminProxyToken: string | null;
+  gameServerInternalUrl: string | null;
 };
 
 const projectRoot = path.resolve(__dirname, "..");
@@ -97,6 +98,7 @@ const config: Config = {
   gameDataAdminEmail: (process.env.GAME_DATA_ADMIN_EMAIL?.trim() || "").toLowerCase(),
   gameDataAdminAccountId: process.env.GAME_DATA_ADMIN_ACCOUNT_ID?.trim() || null,
   gameDataAdminProxyToken: process.env.GAME_DATA_ADMIN_PROXY_TOKEN?.trim() || null,
+  gameServerInternalUrl: process.env.GAME_SERVER_INTERNAL_URL?.trim() || null,
 };
 
 export default config;

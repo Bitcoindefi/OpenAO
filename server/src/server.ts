@@ -200,12 +200,68 @@ const npcs = require("./npcs") as NpcsApi;
 const runtimeTiming = require("./runtimeTiming");
 const handleProtocol = require("./handleProtocol") as HandleProtocolApi;
 
-function handleHttpRequest(request: any, response: any) {
-    void request;
+function readRequestBody(request: any): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        request.on("error", reject);
+    });
+}
 
-    response.statusCode = 404;
+function sendJson(response: any, statusCode: number, body: unknown) {
+    response.statusCode = statusCode;
     response.setHeader("Content-Type", "application/json; charset=utf-8");
-    response.end(JSON.stringify({ error: "Not found" }));
+    response.end(JSON.stringify(body));
+}
+
+function isAuthorizedInternalRequest(request: any): boolean {
+    const authorization = String(request.headers?.authorization ?? "");
+    return authorization === vars.tokenAuth || authorization === `Bearer ${vars.tokenAuth}`;
+}
+
+async function handleHttpRequest(request: any, response: any) {
+    try {
+        const url = new URL(request.url || "/", `http://${request.headers?.host || "localhost"}`);
+        const pathname = url.pathname;
+
+        if (request.method === "GET" && pathname === "/health") {
+            sendJson(response, 200, { ok: true, serverReady: Boolean(vars.serverReady) });
+            return;
+        }
+
+        // API calls this after publish so players see the map without a process restart.
+        const hotReloadMatch = pathname.match(/^\/internal\/maps\/(\d+)\/hot-reload$/);
+        if (request.method === "POST" && hotReloadMatch) {
+            if (!isAuthorizedInternalRequest(request)) {
+                sendJson(response, 401, { error: "Unauthorized" });
+                return;
+            }
+
+            const mapNum = Number.parseInt(hotReloadMatch[1] ?? "", 10);
+            if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                sendJson(response, 400, { error: "mapNum invalido" });
+                return;
+            }
+
+            // Body is optional; keep the handler resilient to empty POSTs.
+            try {
+                await readRequestBody(request);
+            } catch {
+                // ignore body read errors
+            }
+
+            const { applyPublishedMapToLiveServer } = require("./mapLiveApply");
+            const result = await applyPublishedMapToLiveServer(mapNum);
+            sendJson(response, 200, result);
+            return;
+        }
+
+        sendJson(response, 404, { error: "Not found" });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        sendJson(response, 500, { error: message });
+    }
 }
 
 const gracefulShutdown = createGracefulShutdown({

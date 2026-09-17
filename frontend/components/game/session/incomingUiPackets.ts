@@ -1,4 +1,25 @@
 import type { IncomingPacketHandlerArgs } from "./incomingPacketTypes";
+import {
+    invalidateMapCache,
+    refreshMapOverridesInPlace,
+} from "../../../utils/gameLoader";
+
+function parseMapLiveReloadMessage(
+    message: string,
+): { mapNum: number; version: number } | null {
+    const match = message
+        .trim()
+        .match(/^\[MAP_LIVE_RELOAD\]\s+map=(\d+)\s+version=(\d+)\s*$/);
+    if (!match) {
+        return null;
+    }
+    const mapNum = Number.parseInt(match[1] ?? "", 10);
+    const version = Number.parseInt(match[2] ?? "", 10);
+    if (!Number.isInteger(mapNum) || mapNum <= 0 || !Number.isInteger(version)) {
+        return null;
+    }
+    return { mapNum, version };
+}
 
 export async function handleIncomingUiPacket({
     packet,
@@ -6,7 +27,20 @@ export async function handleIncomingUiPacket({
     ctx,
 }: IncomingPacketHandlerArgs): Promise<boolean> {
     switch (packet.type) {
-        case "console":
+        case "console": {
+            const liveReload = parseMapLiveReloadMessage(packet.payload.msg);
+            if (liveReload) {
+                invalidateMapCache(liveReload.mapNum);
+                if (engine?.mapData && engine.mapNumber === liveReload.mapNum) {
+                    void refreshMapOverridesInPlace(engine.mapData, liveReload.mapNum);
+                } else if (engine?.mapData) {
+                    // Still drop cache for that map even if the player already left.
+                    invalidateMapCache(liveReload.mapNum);
+                }
+                // Swallow the machine marker; a human-readable INFO line follows.
+                return true;
+            }
+
             if (
                 /Comienzas a pescar\.|Has dejado de pescar\.|La pesca se canceló\.|Debes equiparte la caña de pescar/i.test(
                     packet.payload.msg,
@@ -29,6 +63,7 @@ export async function handleIncomingUiPacket({
                 consoleLine: packet.payload.msg,
             });
             return true;
+        }
 
         case "dialog": {
             if (packet.payload.id > 0) {

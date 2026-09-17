@@ -17,7 +17,14 @@ import type {
     RuntimeNpc,
 } from "./types/runtime";
 
-import { reloadBalanceDiff, reloadCraftingRecipesDiff, reloadNpcsDiff, reloadObjectsDiff } from "./gameDataSync";
+import {
+    reloadBalanceDiff,
+    reloadCraftingRecipesDiff,
+    reloadMapsDiff,
+    reloadNpcsDiff,
+    reloadObjectsDiff,
+} from "./gameDataSync";
+import { applyPublishedMapToLiveServer } from "./mapLiveApply";
 import {
     appendMapNpcPlacement,
     loadAllMapNpcPlacements,
@@ -3780,6 +3787,44 @@ const command: CommandApi = {
                     const result = await reloadCraftingRecipesDiff();
                     handleProtocol.console(
                         `[INFO] Crafting recargado. Version ${result.previousVersion} -> ${result.currentVersion}. Recetas actualizadas: ${result.updatedRecipes}.`,
+                        "#E69500",
+                        0,
+                        0,
+                        ws as CommandClient,
+                    );
+                    break;
+                }
+
+                case "/recargarmapa": {
+                    if (!hasAdminPrivileges(user)) {
+                        break;
+                    }
+
+                    const mapNum = Number.parseInt(nextText.trim(), 10);
+                    if (!Number.isInteger(mapNum) || mapNum <= 0) {
+                        handleProtocol.console("Uso: /recargarmapa [numero_mapa]", "#FF0000", 0, 0, ws as CommandClient);
+                        break;
+                    }
+
+                    const result = await applyPublishedMapToLiveServer(mapNum);
+                    handleProtocol.console(
+                        `[INFO] Mapa ${result.mapNum} publicado en vivo. Overrides: ${result.appliedOverrides}. Reubicados: ${result.relocatedPlayers}. Notificados: ${result.notifiedPlayers}.`,
+                        "#E69500",
+                        0,
+                        0,
+                        ws as CommandClient,
+                    );
+                    break;
+                }
+
+                case "/recargarmapas": {
+                    if (!hasAdminPrivileges(user)) {
+                        break;
+                    }
+
+                    const result = await reloadMapsDiff();
+                    handleProtocol.console(
+                        `[INFO] Mapas recargados desde DB. Mapas: ${result.updatedMaps}. Overrides: ${result.appliedOverrides}.`,
                         "#E69500",
                         0,
                         0,

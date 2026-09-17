@@ -595,6 +595,76 @@ export async function getMapStatus(mapNum: number): Promise<{
     };
 }
 
+
+/** Todos los overrides publicados, agrupados por mapa (para hidratar el game server). */
+export async function listAllPublishedMapOverrides(): Promise<
+    Array<{ mapNum: number; overrides: MapTileOverride[]; version: number }>
+> {
+    const result = await pool.query<{
+        map_num: number;
+        x: number;
+        y: number;
+        layer: number;
+        grh_index: number | null;
+        blocked: boolean | null;
+        updated_at: Date | string | null;
+    }>(
+        `SELECT map_num, x, y, layer, grh_index, blocked, updated_at
+         FROM game_map_tile_overrides
+         WHERE status = 'published'
+         ORDER BY map_num, y, x, layer`,
+    );
+
+    const mapsMap = new Map<
+        number,
+        { overrides: MapTileOverride[]; latestMs: number }
+    >();
+
+    for (const row of result.rows) {
+        const mapNum = row.map_num;
+        if (!mapsMap.has(mapNum)) {
+            mapsMap.set(mapNum, { overrides: [], latestMs: 0 });
+        }
+        const entry = mapsMap.get(mapNum)!;
+        entry.overrides.push({
+            x: row.x,
+            y: row.y,
+            layer: row.layer,
+            grhIndex: row.grh_index,
+            blocked: row.blocked,
+            status: "published",
+        });
+        const updatedMs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+        if (Number.isFinite(updatedMs) && updatedMs > entry.latestMs) {
+            entry.latestMs = updatedMs;
+        }
+    }
+
+    return Array.from(mapsMap.entries()).map(([mapNum, entry]) => ({
+        mapNum,
+        overrides: entry.overrides,
+        version: entry.latestMs || entry.overrides.length,
+    }));
+}
+
+/** Version monotonic-ish de lo publicado en un mapa (epoch ms del ultimo update). */
+export async function getMapPublishVersion(mapNum: number): Promise<number> {
+    const result = await pool.query<{ version_ms: string | number | null; count: string }>(
+        `SELECT EXTRACT(EPOCH FROM MAX(updated_at)) * 1000 AS version_ms,
+                COUNT(*)::text AS count
+         FROM game_map_tile_overrides
+         WHERE map_num = $1 AND status = 'published'`,
+        [mapNum],
+    );
+
+    const row = result.rows[0];
+    const versionMs = Number(row?.version_ms ?? 0);
+    if (Number.isFinite(versionMs) && versionMs > 0) {
+        return Math.trunc(versionMs);
+    }
+    return Number(row?.count ?? 0);
+}
+
 export async function clearTile(
     mapNum: number,
     x: number,

@@ -51,6 +51,23 @@ const jsonRequestCache = new Map<string, Promise<unknown>>();
 const jsonValueCache = new Map<string, unknown>();
 const mapRequestCache = new Map<number, Promise<MapData>>();
 const mapValueCache = new Map<number, MapData>();
+
+/** Drop one map (or all) from the client cache so the next loadMapData refetches overrides. */
+export function invalidateMapCache(mapNumber?: number): void {
+    if (typeof mapNumber === "number") {
+        mapValueCache.delete(mapNumber);
+        mapRequestCache.delete(mapNumber);
+        return;
+    }
+
+    mapValueCache.clear();
+    mapRequestCache.clear();
+}
+
+export function clearMapCache(): void {
+    invalidateMapCache();
+}
+
 const DYNAMIC_INSTANCE_MAP_START = 30_000;
 const DYNAMIC_INSTANCE_MAP_STRIDE = 50;
 const CHALLENGE_INSTANCE_MAP_START = 2_000;
@@ -840,6 +857,21 @@ async function applyMapOverrides(
 /**
  * Get the texture path for a graphic
  */
+/**
+ * Re-fetch published overrides and merge into an already-loaded MapData object.
+ * Used after live publish so players see terrain/block changes without reconnecting.
+ */
+export async function refreshMapOverridesInPlace(
+    mapData: MapData,
+    mapNumber: number,
+): Promise<number> {
+    invalidateMapCache(mapNumber);
+    const before = JSON.stringify(mapData[String(mapNumber)] ?? mapData[mapNumber] ?? null);
+    await applyMapOverrides(mapData, mapNumber);
+    const after = JSON.stringify(mapData[String(mapNumber)] ?? mapData[mapNumber] ?? null);
+    return before === after ? 0 : 1;
+}
+
 export function getTexturePath(graphicData: GraphicData): string {
     // if (LOCAL_GRAPHICS_FILE_NAMES.has(Number(graphicData.numFile))) {
     //     return `/graphics/${graphicData.numFile}.png`;
