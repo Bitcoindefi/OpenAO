@@ -11,6 +11,7 @@ import {
     type ReactNode,
 } from "react";
 import type {
+    MapEditorAccess,
     EditorNpc,
     EditorObject,
     MapStatus,
@@ -117,6 +118,10 @@ export type RecentsEntry = {
 };
 
 type EditorStoreValue = {
+    access: MapEditorAccess;
+    protectedOverride: boolean;
+    setProtectedOverride: (value: boolean) => void;
+    canWriteMap: boolean;
     mapNum: number;
     setMapNum: (mapNum: number) => void;
     objects: EditorObject[];
@@ -183,12 +188,21 @@ function writeRecentsToStorage(recents: RecentsEntry[]): void {
 
 export function EditorStoreProvider({
     initialMapNum = DEFAULT_MAP_NUM,
+    access,
     children,
 }: {
     initialMapNum?: number;
+    access: MapEditorAccess;
     children: ReactNode;
 }) {
     const [mapNum, setMapNumState] = useState(initialMapNum);
+    const [overrideMap, setOverrideMap] = useState<number | null>(null);
+    const protectedOverride = access.isGameDataAdmin && overrideMap === mapNum;
+    const canWriteMap = (access.isGameDataAdmin || access.editableMapIds.includes(mapNum)) &&
+        (!access.protectedMapIds.includes(mapNum) || protectedOverride);
+    const setProtectedOverride = useCallback((value: boolean) => {
+        setOverrideMap(value && access.isGameDataAdmin ? mapNum : null);
+    }, [access.isGameDataAdmin, mapNum]);
     const [objects, setObjects] = useState<EditorObject[]>([]);
     const [npcs, setNpcs] = useState<EditorNpc[]>([]);
     const [terrain, setTerrain] = useState<TerrainPalette | null>(null);
@@ -202,8 +216,11 @@ export function EditorStoreProvider({
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
     const refreshTokenRef = useRef(0);
+    const activeMapRef = useRef(initialMapNum);
 
     const refreshMapData = useCallback(async () => {
+        // Un guardado del lienzo anterior puede terminar despues de cambiar mapa.
+        if (activeMapRef.current !== mapNum) return;
         const token = ++refreshTokenRef.current;
         setIsLoading(true);
         setLoadError(null);
@@ -241,22 +258,31 @@ export function EditorStoreProvider({
     }, [mapNum]);
 
     const refreshStatus = useCallback(async () => {
+        if (activeMapRef.current !== mapNum) return;
+        const token = refreshTokenRef.current;
         try {
             const statusData = await getMapStatus(mapNum);
-            setStatus(statusData);
+            if (activeMapRef.current === mapNum && refreshTokenRef.current === token) {
+                setStatus(statusData);
+            }
         } catch {
             // El estado se refresca solo; si falla se conserva el anterior.
         }
     }, [mapNum]);
 
     const setMapNum = useCallback((nextMapNum: number) => {
+        if (!Number.isSafeInteger(nextMapNum) || nextMapNum < 1 ||
+            (!access.isGameDataAdmin && !access.editableMapIds.includes(nextMapNum))) return;
+        activeMapRef.current = nextMapNum;
+        ++refreshTokenRef.current;
+        setOverrideMap(null);
         setMapNumState(nextMapNum);
         setOverrides([]);
         setEntities([]);
         setStatus(null);
         setTerrain(null);
         setTool(null);
-    }, []);
+    }, [access]);
 
     const addRecent = useCallback((entry: RecentsEntry) => {
         setRecents((current) => {
@@ -303,6 +329,7 @@ export function EditorStoreProvider({
 
     const value = useMemo<EditorStoreValue>(
         () => ({
+            access, protectedOverride, setProtectedOverride, canWriteMap,
             mapNum,
             setMapNum,
             objects,
@@ -321,6 +348,7 @@ export function EditorStoreProvider({
             loadError,
         }),
         [
+            access, protectedOverride, setProtectedOverride, canWriteMap,
             addRecent,
             entities,
             isLoading,

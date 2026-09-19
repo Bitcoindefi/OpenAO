@@ -181,12 +181,13 @@ export async function getMapStatus(mapNum: number): Promise<MapStatus> {
 export async function paintTiles(
     mapNum: number,
     tiles: TilePaint[],
+    protectedOverride = false,
 ): Promise<void> {
     const response = await requestJson<{ error?: string }>(
         editorPath(`maps/${mapNum}/tiles`),
         {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...mapWriteHeaders(protectedOverride) },
             body: JSON.stringify({ tiles }),
         },
     );
@@ -201,10 +202,11 @@ export async function clearTileOverride(
     x: number,
     y: number,
     layer: number,
+    protectedOverride = false,
 ): Promise<void> {
     const response = await requestJson<{ error?: string }>(
         editorPath(`maps/${mapNum}/tiles/${x}/${y}/${layer}`),
-        { method: "DELETE" },
+        { method: "DELETE", headers: mapWriteHeaders(protectedOverride) },
     );
 
     if (!response.ok) {
@@ -217,12 +219,13 @@ export async function clearTileOverride(
 export async function placeTileEntity(
     mapNum: number,
     placement: EntityPlacement,
+    protectedOverride = false,
 ): Promise<void> {
     const response = await requestJson<{ error?: string }>(
         editorPath(`maps/${mapNum}/entities`),
         {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...mapWriteHeaders(protectedOverride) },
             body: JSON.stringify(placement),
         },
     );
@@ -239,10 +242,11 @@ export async function removeTileEntity(
     x: number,
     y: number,
     kind: "obj" | "npc",
+    protectedOverride = false,
 ): Promise<void> {
     const response = await requestJson<{ error?: string }>(
         editorPath(`maps/${mapNum}/entities/${x}/${y}/${kind}`),
-        { method: "DELETE" },
+        { method: "DELETE", headers: mapWriteHeaders(protectedOverride) },
     );
 
     if (!response.ok) {
@@ -252,10 +256,10 @@ export async function removeTileEntity(
     }
 }
 
-export async function publishMapChanges(mapNum: number): Promise<void> {
+export async function publishMapChanges(mapNum: number, protectedOverride = false): Promise<void> {
     const response = await requestJson<{ error?: string }>(
         editorPath(`maps/${mapNum}/publish`),
-        { method: "POST" },
+        { method: "POST", headers: mapWriteHeaders(protectedOverride) },
     );
 
     if (!response.ok) {
@@ -263,10 +267,10 @@ export async function publishMapChanges(mapNum: number): Promise<void> {
     }
 }
 
-export async function discardMapDrafts(mapNum: number): Promise<void> {
+export async function discardMapDrafts(mapNum: number, protectedOverride = false): Promise<void> {
     const response = await requestJson<{ error?: string }>(
         editorPath(`maps/${mapNum}/discard`),
-        { method: "POST" },
+        { method: "POST", headers: mapWriteHeaders(protectedOverride) },
     );
 
     if (!response.ok) {
@@ -274,10 +278,10 @@ export async function discardMapDrafts(mapNum: number): Promise<void> {
     }
 }
 
-export async function revertMapChanges(mapNum: number): Promise<void> {
+export async function revertMapChanges(mapNum: number, protectedOverride = false): Promise<void> {
     const response = await requestJson<{ error?: string }>(
         editorPath(`maps/${mapNum}/revert`),
-        { method: "POST" },
+        { method: "POST", headers: mapWriteHeaders(protectedOverride) },
     );
 
     if (!response.ok) {
@@ -329,22 +333,23 @@ export async function getMapOverrides(mapNum: number): Promise<MapOverridesRespo
     return response.data as MapOverridesResponse;
 }
 
-/**
- * Si la cuenta actual puede usar el modo construccion.
- *
- * La sesion publica no dice si la cuenta es admin de game-data, y compararlo en
- * el cliente exigiria mandarle el email de admin al navegador. Preguntar a la
- * API deja el dato del lado del servidor.
- */
-export async function isGameDataAdmin(): Promise<boolean> {
-    try {
-        const response = await requestJson<{ isGameDataAdmin?: boolean }>(
-            editorPath("session"),
-        );
+export type MapEditorAccess = {
+    isGameDataAdmin: boolean;
+    canEditMaps: boolean;
+    editableMapIds: number[];
+    protectedMapIds: number[];
+};
 
-        return response.ok && response.data.isGameDataAdmin === true;
+/** Los permisos vienen de la sesion del servidor, nunca de datos del cliente. */
+export async function getMapEditorAccess(): Promise<MapEditorAccess | null> {
+    try {
+        const response = await requestJson<MapEditorAccess>(editorPath("session"), { cache: "no-store" });
+        return response.ok ? response.data : null;
     } catch {
-        // Sin red se asume que no hay permiso: es el caso seguro.
-        return false;
+        return null;
     }
+}
+
+function mapWriteHeaders(protectedOverride: boolean): Record<string, string> {
+    return protectedOverride ? { "x-protected-map-override": "true" } : {};
 }
