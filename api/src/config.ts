@@ -18,6 +18,7 @@ type Config = {
   sesSecretAccessKey: string | null;
   sesFromEmail: string | null;
   sesFromName: string;
+  protectedMapIds: number[];
   gameDataAdminEmail: string;
   gameDataAdminAccountId: string | null;
   gameDataAdminProxyToken: string | null;
@@ -75,6 +76,15 @@ function getOptionalNumberEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function getProtectedMapIds(): number[] {
+  const raw = process.env.GAME_DATA_PROTECTED_MAP_IDS?.trim() || "1";
+  const ids = raw.split(",").map((value) => Number(value.trim()));
+  if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+    throw new Error("GAME_DATA_PROTECTED_MAP_IDS must contain positive map IDs");
+  }
+  return [...new Set(ids)];
+}
+
 readEnvFile();
 
 const config: Config = {
@@ -94,6 +104,7 @@ const config: Config = {
   sesSecretAccessKey: process.env.SES_SECRET_ACCESS_KEY?.trim() || null,
   sesFromEmail: process.env.SES_FROM_EMAIL?.trim() || null,
   sesFromName: process.env.SES_FROM_NAME?.trim() || "AOWeb",
+  protectedMapIds: getProtectedMapIds(),
   gameDataAdminEmail: (process.env.GAME_DATA_ADMIN_EMAIL?.trim() || "").toLowerCase(),
   gameDataAdminAccountId: process.env.GAME_DATA_ADMIN_ACCOUNT_ID?.trim() || null,
   gameDataAdminProxyToken: process.env.GAME_DATA_ADMIN_PROXY_TOKEN?.trim() || null,
