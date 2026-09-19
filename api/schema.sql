@@ -652,3 +652,23 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+
+-- Operators grant/revoke map-specific access through this table.
+CREATE TABLE IF NOT EXISTS game_map_editors (
+    map_num INTEGER NOT NULL CHECK (map_num > 0),
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    PRIMARY KEY (account_id, map_num)
+);
+
+-- Keep the actor UUID even if the account is later removed.
+CREATE TABLE IF NOT EXISTS game_map_edit_audit (
+    id BIGSERIAL PRIMARY KEY,
+    map_num INTEGER NOT NULL CHECK (map_num > 0),
+    account_id UUID NOT NULL,
+    action TEXT NOT NULL,
+    details JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_game_map_edit_audit_map_time
+    ON game_map_edit_audit (map_num, created_at);

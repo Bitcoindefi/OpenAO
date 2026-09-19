@@ -158,6 +158,7 @@ export default function EditorCanvas({
 }: EditorCanvasProps) {
     const {
         mapNum,
+        protectedOverride, canWriteMap,
         tool,
         overrides,
         entities,
@@ -767,7 +768,7 @@ export default function EditorCanvas({
             }
 
             for (let i = 0; i < tiles.length; i += PAINT_BATCH_SIZE) {
-                await paintTiles(mapNum, tiles.slice(i, i + PAINT_BATCH_SIZE));
+                await paintTiles(mapNum, tiles.slice(i, i + PAINT_BATCH_SIZE), protectedOverride);
             }
 
             await refreshMapData();
@@ -783,7 +784,7 @@ export default function EditorCanvas({
             applyingRef.current = false;
             setIsApplying(false);
         }
-    }, [mapNum, refreshMapData, refreshStatus]);
+    }, [mapNum, protectedOverride, refreshMapData, refreshStatus]);
 
     useEffect(() => {
         flushRef.current = flushPending;
@@ -824,9 +825,9 @@ export default function EditorCanvas({
             // sin aplicar.
             const request = Promise.all([
                 ...layers.map((layer) =>
-                    clearTileOverride(mapNum, x, y, layer),
+                    clearTileOverride(mapNum, x, y, layer, protectedOverride),
                 ),
-                ...kinds.map((kind) => removeTileEntity(mapNum, x, y, kind)),
+                ...kinds.map((kind) => removeTileEntity(mapNum, x, y, kind, protectedOverride)),
             ]);
 
             pendingRef.current.inFlight.push(request);
@@ -835,12 +836,12 @@ export default function EditorCanvas({
 
             await request;
         },
-        [draftEntitiesByTile, draftLayersByTile, mapNum, scheduleFlush],
+        [draftEntitiesByTile, draftLayersByTile, mapNum, protectedOverride, scheduleFlush],
     );
 
     const applyToolToTile = useCallback(
         async (x: number, y: number) => {
-            if (!tool) {
+            if (!tool || !canWriteMap) {
                 return;
             }
 
@@ -871,7 +872,7 @@ export default function EditorCanvas({
                             tool.kind === "object"
                                 ? tool.object.id
                                 : tool.npc.id,
-                    });
+                    }, protectedOverride);
 
                     pendingRef.current.inFlight.push(request);
                     pendingRef.current.needsRefresh = true;
@@ -912,7 +913,7 @@ export default function EditorCanvas({
                 );
             }
         },
-        [eraseTile, mapNum, scheduleFlush, tool],
+        [eraseTile, mapNum, protectedOverride, canWriteMap, scheduleFlush, tool],
     );
 
     // Interacciones de camara y pintado.
@@ -1071,14 +1072,17 @@ export default function EditorCanvas({
         };
     }, [applyCamera, applyToolToTile, dimensions, tool]);
 
-    // Limpieza del timer de pintado al desmontar.
+    // Conserva el ultimo trazo al cambiar mapa o desactivar el override.
+    // Cada lienzo mantiene el mapa y el permiso con que se inicio ese trazo.
     useEffect(() => {
         const pending = pendingRef.current;
 
         return () => {
             if (pending.timer !== null) {
                 window.clearTimeout(pending.timer);
+                pending.timer = null;
             }
+            void flushRef.current?.();
         };
     }, []);
 

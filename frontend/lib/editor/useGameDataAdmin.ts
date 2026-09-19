@@ -1,45 +1,36 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { isGameDataAdmin } from "./editorApi";
+import { getMapEditorAccess, type MapEditorAccess } from "./editorApi";
 
 export type GameDataAdminState = "loading" | "allowed" | "denied";
 
-/**
- * Si la cuenta puede editar mapas.
- *
- * El permiso lo decide la API: el token del proxy vive solo en el servidor, asi
- * que el navegador no tiene forma de saberlo por su cuenta y hay que preguntar.
- * Es un gate de interfaz para no mostrar un editor que va a responder 403, no
- * una barrera de seguridad: cada endpoint del editor valida por su cuenta.
- *
- * @param enabled Cuando es `false` no se pregunta nada y el estado es `denied`.
- *   Sirve para no gastar una peticion si ya se sabe que no hay sesion.
- */
-export function useGameDataAdmin(enabled = true): GameDataAdminState {
-    const [state, setState] = useState<GameDataAdminState>(
-        enabled ? "loading" : "denied",
-    );
+/** Gate de interfaz; cada ruta vuelve a comprobar los permisos en la API. */
+export function useMapEditorAccess(enabled = true) {
+    const [result, setResult] = useState<{
+        state: GameDataAdminState;
+        access: MapEditorAccess | null;
+    }>({ state: enabled ? "loading" : "denied", access: null });
 
     useEffect(() => {
+        let cancelled = false;
         if (!enabled) {
-            setState("denied");
+            setResult({ state: "denied", access: null });
             return;
         }
-
-        let cancelled = false;
-        setState("loading");
-
-        void isGameDataAdmin().then((allowed) => {
+        setResult({ state: "loading", access: null });
+        void getMapEditorAccess().then((access) => {
             if (!cancelled) {
-                setState(allowed ? "allowed" : "denied");
+                setResult({ state: access?.canEditMaps ? "allowed" : "denied", access });
             }
         });
-
-        return () => {
-            cancelled = true;
-        };
+        return () => { cancelled = true; };
     }, [enabled]);
 
-    return state;
+    return result;
+}
+
+/** Compatibilidad con el enlace al modo construccion. */
+export function useGameDataAdmin(enabled = true): GameDataAdminState {
+    return useMapEditorAccess(enabled).state;
 }

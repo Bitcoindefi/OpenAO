@@ -4,7 +4,7 @@ import { Suspense, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { EditorStoreProvider, useEditorStore } from "../../lib/editor/editorStore";
-import { useGameDataAdmin } from "../../lib/editor/useGameDataAdmin";
+import { useMapEditorAccess } from "../../lib/editor/useGameDataAdmin";
 import EditorToolbar from "../../components/editor/EditorToolbar";
 import RecentsStrip from "../../components/editor/RecentsStrip";
 import TerrainPalette from "../../components/editor/TerrainPalette";
@@ -76,6 +76,7 @@ function EditorPanels() {
 }
 
 function ConstruccionEditor() {
+    const { mapNum, protectedOverride } = useEditorStore();
     return (
         <div className="mx-auto flex max-w-[1400px] flex-col gap-3 px-4 py-6">
             <div className="flex items-center justify-between">
@@ -95,7 +96,7 @@ function ConstruccionEditor() {
             <div className="flex gap-3">
                 <EditorPanels />
                 <main className="min-w-0 flex-1">
-                    <EditorCanvas />
+                    <EditorCanvas key={`${mapNum}:${protectedOverride}`} />
                 </main>
             </div>
 
@@ -105,7 +106,7 @@ function ConstruccionEditor() {
 }
 
 export default function ConstruccionPage() {
-    const adminState = useGameDataAdmin();
+    const { state: adminState, access } = useMapEditorAccess();
 
     if (adminState === "loading") {
         return (
@@ -118,7 +119,7 @@ export default function ConstruccionPage() {
     // El editor no se monta sin permiso: si lo hiciera, cada panel pediria su
     // catalogo para recibir un 403 y la pantalla quedaria vacia sin explicar
     // por que.
-    if (adminState === "denied") {
+    if (adminState === "denied" || !access) {
         return (
             <div className="mx-auto max-w-md px-4 py-16 text-center">
                 <h1 className="text-lg font-semibold text-stone-100">
@@ -127,7 +128,7 @@ export default function ConstruccionPage() {
                 <p className="mt-2 text-[12px] leading-relaxed text-stone-400">
                     Esta seccion es solo para las cuentas con permiso de
                     edicion de mapas. Si deberias tenerlo, pedile a un
-                    administrador que agregue tu correo a la lista.
+                    administrador que te asigne un mapa.
                 </p>
                 <div className="mt-6 flex justify-center gap-2">
                     <Link
@@ -148,7 +149,7 @@ export default function ConstruccionPage() {
     }
 
     return (
-        <EditorStoreProvider>
+        <EditorStoreProvider access={access} initialMapNum={access.isGameDataAdmin ? 1 : access.editableMapIds[0]}>
             <Suspense fallback={null}>
                 <ConstruccionEditor />
             </Suspense>

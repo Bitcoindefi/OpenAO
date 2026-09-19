@@ -1,3 +1,5 @@
+import { auditedNpcSave } from "./repositories/mapNpcAudit";
+import { canEditMap, listEditableMaps } from "./repositories/mapPermissions";
 import {
     loadMapNpcPlacements,
     placeMapNpc,
@@ -217,7 +219,7 @@ async function requireAdminEmailSession(
     request: express.Request,
     response: express.Response,
 ): Promise<ReturnType<typeof getAuthorizedSession> | null> {
-    if (!config.gameDataAdminAccountId) {
+    if (!config.gameDataAdminAccountId && !config.gameDataAdminEmail) {
         response
             .status(403)
             .json({ error: "Admin de game-data deshabilitado." });
@@ -244,6 +246,57 @@ async function requireAdminEmailSession(
         return null;
     }
 
+    return authorized;
+}
+
+/** A proxy token authenticates the frontend, never the editing account. */
+async function requireEditorSession(request: express.Request, response: express.Response) {
+    if (!config.gameDataAdminProxyToken ||
+        getGameDataAdminProxyHeader(request) !== config.gameDataAdminProxyToken) {
+        response.status(403).json({ error: "No autorizado." });
+        return null;
+    }
+    const authorized = await getAuthorizedSession(request);
+    if (!authorized) {
+        response.status(401).json({ error: "Unauthorized" });
+        return null;
+    }
+    return authorized;
+}
+
+/** Catalogos de solo lectura para las cuentas con al menos un mapa asignado. */
+async function requireMapCatalogSession(request: express.Request, response: express.Response) {
+    const authorized = await requireEditorSession(request, response);
+    if (!authorized) return null;
+    if (!isAuthorizedGameDataAdmin(authorized.session) &&
+        (await listEditableMaps(authorized.session.account._id)).length === 0) {
+        response.status(403).json({ error: "Sin permiso de edicion de mapas." });
+        return null;
+    }
+    return authorized;
+}
+
+async function requireMapEditorSession(request: express.Request, response: express.Response) {
+    const authorized = await requireEditorSession(request, response);
+    if (!authorized) return null;
+    const rawMapNum = request.params.mapNum;
+    const mapNum = typeof rawMapNum === "string" && /^[1-9]\d*$/.test(rawMapNum)
+        ? Number(rawMapNum) : NaN;
+    if (!Number.isSafeInteger(mapNum)) {
+        response.status(400).json({ error: "Numero de mapa invalido." });
+        return null;
+    }
+    const isAdmin = isAuthorizedGameDataAdmin(authorized.session);
+    if (!isAdmin && !await canEditMap(authorized.session.account._id, mapNum)) {
+        response.status(403).json({ error: "Sin permiso para editar este mapa." });
+        return null;
+    }
+    if (request.method !== "GET" && request.method !== "HEAD" &&
+        config.protectedMapIds.includes(mapNum) &&
+        (!isAdmin || request.header("x-protected-map-override") !== "true")) {
+        response.status(403).json({ error: "Mapa protegido: requiere un administrador y override explicito." });
+        return null;
+    }
     return authorized;
 }
 
@@ -439,7 +492,7 @@ app.put(
 
 app.get("/admin/game-data/objects", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapCatalogSession(request, response);
         if (!authorized) {
             return;
         }
@@ -510,7 +563,7 @@ app.put("/admin/game-data/objects/:id", async (request, response) => {
 
 app.get("/admin/game-data/npcs", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapCatalogSession(request, response);
         if (!authorized) {
             return;
         }
@@ -862,7 +915,7 @@ app.get("/game-data/graphics/:grhIndex.png", async (request, response) => {
 
 app.put("/admin/game-data/maps/:mapNum/tiles", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -899,7 +952,7 @@ app.delete(
     "/admin/game-data/maps/:mapNum/tiles/:x/:y/:layer",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
+            const authorized = await requireMapEditorSession(
                 request,
                 response,
             );
@@ -915,7 +968,7 @@ app.delete(
                 return;
             }
 
-            response.json({ removed: await clearTile(mapNum, x, y, layer) });
+            response.json({ removed: await clearTile(mapNum, x, y, layer, authorized.session.account._id) });
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unexpected error";
@@ -947,7 +1000,8 @@ app.get("/maps/:mapNum/overrides", async (request, response) => {
         try {
             const authorized = await getAuthorizedSession(request);
             includeDrafts = Boolean(
-                authorized && isAuthorizedGameDataAdmin(authorized.session),
+                authorized && (isAuthorizedGameDataAdmin(authorized.session) ||
+                    await canEditMap(authorized.session.account._id, mapNum)),
             );
         } catch {
             // Sin sesion valida se sirve lo publicado, que es el caso normal.
@@ -977,7 +1031,7 @@ app.get(
     "/admin/game-data/maps/:mapNum/overrides",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
+            const authorized = await requireMapEditorSession(
                 request,
                 response,
             );
@@ -1012,12 +1066,15 @@ app.get(
  * desde el cliente significaria filtrar el email de admin al navegador.
  */
 app.get("/admin/game-data/session", async (request, response) => {
-    const authorized = await requireAdminEmailSession(request, response);
-
+    const authorized = await requireEditorSession(request, response);
     if (!authorized) return;
-
+    const isAdmin = isAuthorizedGameDataAdmin(authorized.session);
+    const editableMapIds = await listEditableMaps(authorized.session.account._id);
     response.json({
-        isGameDataAdmin: true,
+        isGameDataAdmin: isAdmin,
+        canEditMaps: isAdmin || editableMapIds.length > 0,
+        editableMapIds,
+        protectedMapIds: config.protectedMapIds,
         accountId: authorized.session.account._id,
     });
 });
@@ -1025,7 +1082,7 @@ app.get("/admin/game-data/session", async (request, response) => {
 /** Publica los borradores de un mapa. A partir de aca los ven los jugadores. */
 app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -1048,7 +1105,7 @@ app.post("/admin/game-data/maps/:mapNum/publish", async (request, response) => {
 /** Descarta los borradores sin tocar lo ya publicado. */
 app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -1058,7 +1115,7 @@ app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
             return;
         }
 
-        response.json(await discardDrafts(mapNum));
+        response.json(await discardDrafts(mapNum, authorized.session.account._id));
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1072,7 +1129,7 @@ app.post("/admin/game-data/maps/:mapNum/discard", async (request, response) => {
  */
 app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -1082,7 +1139,7 @@ app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
             return;
         }
 
-        response.json(await revertMap(mapNum));
+        response.json(await revertMap(mapNum, authorized.session.account._id));
     } catch (error) {
         const message =
             error instanceof Error ? error.message : "Unexpected error";
@@ -1093,7 +1150,7 @@ app.post("/admin/game-data/maps/:mapNum/revert", async (request, response) => {
 /** Cuantos tiles hay en borrador y cuantos publicados. */
 app.get("/admin/game-data/maps/:mapNum/status", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -1119,7 +1176,7 @@ app.get(
     "/admin/game-data/maps/:mapNum/terrain",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
+            const authorized = await requireMapEditorSession(
                 request,
                 response,
             );
@@ -1148,7 +1205,7 @@ app.put(
     "/admin/game-data/maps/:mapNum/entities",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
+            const authorized = await requireMapEditorSession(
                 request,
                 response,
             );
@@ -1190,7 +1247,7 @@ app.delete(
     "/admin/game-data/maps/:mapNum/entities/:x/:y/:kind",
     async (request, response) => {
         try {
-            const authorized = await requireAdminEmailSession(
+            const authorized = await requireMapEditorSession(
                 request,
                 response,
             );
@@ -1212,7 +1269,7 @@ app.delete(
             }
 
             response.json({
-                removed: await removeTileEntity(mapNum, x, y, kind),
+                removed: await removeTileEntity(mapNum, x, y, kind, authorized.session.account._id),
             });
         } catch (error) {
             const message =
@@ -3081,7 +3138,7 @@ void start();
  */
 app.get("/admin/game-data/maps/:mapNum/npcs", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -3101,7 +3158,7 @@ app.get("/admin/game-data/maps/:mapNum/npcs", async (request, response) => {
 
 app.post("/admin/game-data/maps/:mapNum/npcs", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -3115,6 +3172,7 @@ app.post("/admin/game-data/maps/:mapNum/npcs", async (request, response) => {
             mapsSourceDir,
             { ...request.body, mapNum },
             {
+                persist: auditedNpcSave(authorized.session.account._id, "placeMapNpc"),
                 maxNpcs: MAX_NPCS_PER_MAP,
                 isValidNpcIndex: async (idx) => await isValidGameNpcIndex(idx)
             }
@@ -3134,7 +3192,7 @@ app.post("/admin/game-data/maps/:mapNum/npcs", async (request, response) => {
 
 app.put("/admin/game-data/maps/:mapNum/npcs/move", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -3157,7 +3215,8 @@ app.put("/admin/game-data/maps/:mapNum/npcs/move", async (request, response) => 
             fromX,
             fromY,
             toX,
-            toY
+            toY,
+            { persist: auditedNpcSave(authorized.session.account._id, "moveMapNpc") }
         );
 
         if (!result.ok) {
@@ -3174,7 +3233,7 @@ app.put("/admin/game-data/maps/:mapNum/npcs/move", async (request, response) => 
 
 app.delete("/admin/game-data/maps/:mapNum/npcs/:x/:y", async (request, response) => {
     try {
-        const authorized = await requireAdminEmailSession(request, response);
+        const authorized = await requireMapEditorSession(request, response);
         if (!authorized) return;
 
         const mapNum = Number.parseInt(request.params.mapNum ?? "", 10);
@@ -3187,7 +3246,7 @@ app.delete("/admin/game-data/maps/:mapNum/npcs/:x/:y", async (request, response)
         }
 
         const mapsSourceDir = resolveMapsSourceDir();
-        const result = await removeMapNpc(mapsSourceDir, mapNum, x, y);
+        const result = await removeMapNpc(mapsSourceDir, mapNum, x, y, { persist: auditedNpcSave(authorized.session.account._id, "removeMapNpc") });
 
         if (!result.ok) {
             response.status(400).json({ error: result.reason });

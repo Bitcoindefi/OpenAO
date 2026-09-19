@@ -67,6 +67,13 @@ async function handleEditorProxy(
     headers.set("Authorization", `Bearer ${token}`);
     headers.set("x-game-data-admin-token", adminProxyToken);
 
+    // Forward only explicit intent. The API independently verifies the account.
+    if (["PUT", "POST", "DELETE"].includes(method) &&
+        path[0] === "maps" &&
+        request.headers.get("x-protected-map-override") === "true") {
+        headers.set("x-protected-map-override", "true");
+    }
+
     const incomingContentType = request.headers.get("content-type");
 
     if (incomingContentType) {

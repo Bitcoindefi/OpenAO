@@ -1,3 +1,4 @@
+import { auditedMapEdit, recordMapEdit } from "./mapAudit";
 import crypto from "crypto";
 import { existsSync } from "fs";
 import fs from "fs/promises";
@@ -288,6 +289,7 @@ export async function paintTiles(
             );
         }
 
+        await recordMapEdit(client, mapNum, accountId, "paintTiles", { tiles });
         await client.query("COMMIT");
 
         return { applied: tiles.length };
@@ -387,6 +389,7 @@ export async function placeTileEntity(
             ],
         );
 
+        await recordMapEdit(client, mapNum, accountId, "placeTileEntity", { placement });
         await client.query("COMMIT");
 
         return { placed: true };
@@ -404,14 +407,17 @@ export async function removeTileEntity(
     x: number,
     y: number,
     kind: TileEntityKind,
+    accountId: string,
 ): Promise<boolean> {
-    const result = await pool.query(
-        `DELETE FROM game_map_tile_entities
-         WHERE map_num = $1 AND x = $2 AND y = $3 AND kind = $4 AND status = 'draft'`,
-        [mapNum, x, y, kind],
-    );
+    return auditedMapEdit(mapNum, accountId, "removeTileEntity", { x, y, kind }, async (client) => {
+        const result = await client.query(
+            `DELETE FROM game_map_tile_entities
+             WHERE map_num = $1 AND x = $2 AND y = $3 AND kind = $4 AND status = 'draft'`,
+            [mapNum, x, y, kind],
+        );
 
-    return (result.rowCount ?? 0) > 0;
+        return (result.rowCount ?? 0) > 0;
+    });
 }
 
 /**
@@ -498,6 +504,7 @@ export async function publishMap(
             [mapNum],
         );
 
+        await recordMapEdit(client, mapNum, accountId, "publishMap", { published: result.rowCount ?? 0, publishedEntities: entitiesResult.rowCount ?? 0 });
         await client.query("COMMIT");
 
         return {
@@ -515,21 +522,24 @@ export async function publishMap(
 /** Descarta los borradores sin tocar lo que ya esta publicado. */
 export async function discardDrafts(
     mapNum: number,
+    accountId: string,
 ): Promise<{ discarded: number; discardedEntities: number }> {
-    const result = await pool.query(
-        `DELETE FROM game_map_tile_overrides WHERE map_num = $1 AND status = 'draft'`,
-        [mapNum],
-    );
+    return auditedMapEdit(mapNum, accountId, "discardDrafts", {}, async (client) => {
+        const result = await client.query(
+            `DELETE FROM game_map_tile_overrides WHERE map_num = $1 AND status = 'draft'`,
+            [mapNum],
+        );
 
-    const entitiesResult = await pool.query(
-        `DELETE FROM game_map_tile_entities WHERE map_num = $1 AND status = 'draft'`,
-        [mapNum],
-    );
+        const entitiesResult = await client.query(
+            `DELETE FROM game_map_tile_entities WHERE map_num = $1 AND status = 'draft'`,
+            [mapNum],
+        );
 
-    return {
-        discarded: result.rowCount ?? 0,
-        discardedEntities: entitiesResult.rowCount ?? 0,
-    };
+        return {
+            discarded: result.rowCount ?? 0,
+            discardedEntities: entitiesResult.rowCount ?? 0,
+        };
+    });
 }
 
 /**
@@ -538,21 +548,24 @@ export async function discardDrafts(
  */
 export async function revertMap(
     mapNum: number,
+    accountId: string,
 ): Promise<{ reverted: number; revertedEntities: number }> {
-    const result = await pool.query(
-        `DELETE FROM game_map_tile_overrides WHERE map_num = $1`,
-        [mapNum],
-    );
+    return auditedMapEdit(mapNum, accountId, "revertMap", {}, async (client) => {
+        const result = await client.query(
+            `DELETE FROM game_map_tile_overrides WHERE map_num = $1`,
+            [mapNum],
+        );
 
-    const entitiesResult = await pool.query(
-        `DELETE FROM game_map_tile_entities WHERE map_num = $1`,
-        [mapNum],
-    );
+        const entitiesResult = await client.query(
+            `DELETE FROM game_map_tile_entities WHERE map_num = $1`,
+            [mapNum],
+        );
 
-    return {
-        reverted: result.rowCount ?? 0,
-        revertedEntities: entitiesResult.rowCount ?? 0,
-    };
+        return {
+            reverted: result.rowCount ?? 0,
+            revertedEntities: entitiesResult.rowCount ?? 0,
+        };
+    });
 }
 
 /** Cuantos tiles y entidades tiene el mapa en cada estado, para mostrar en la UI. */
@@ -600,14 +613,17 @@ export async function clearTile(
     x: number,
     y: number,
     layer: number,
+    accountId: string,
 ): Promise<boolean> {
-    const result = await pool.query(
-        `DELETE FROM game_map_tile_overrides
-         WHERE map_num = $1 AND x = $2 AND y = $3 AND layer = $4 AND status = 'draft'`,
-        [mapNum, x, y, layer],
-    );
+    return auditedMapEdit(mapNum, accountId, "clearTile", { x, y, layer }, async (client) => {
+        const result = await client.query(
+            `DELETE FROM game_map_tile_overrides
+             WHERE map_num = $1 AND x = $2 AND y = $3 AND layer = $4 AND status = 'draft'`,
+            [mapNum, x, y, layer],
+        );
 
-    return (result.rowCount ?? 0) > 0;
+        return (result.rowCount ?? 0) > 0;
+    });
 }
 
 /**
@@ -618,6 +634,9 @@ export async function clearTile(
  * frontend. Si la copia fuente no existe, el mapa no es editable.
  */
 export function resolveMapsSourceDir(): string {
+    if (process.env.GAME_DATA_MAPS_SOURCE_DIR?.trim()) {
+        return path.resolve(process.env.GAME_DATA_MAPS_SOURCE_DIR.trim());
+    }
     const candidates = [
         path.resolve(__dirname, ".."),
         path.resolve(__dirname, "..", "..", "src"),

@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import fs from "fs/promises";
 import path from "path";
@@ -175,13 +176,21 @@ export async function saveMapNpcPlacements(
         ...(p.movement !== undefined ? { movement: p.movement } : {}),
     }));
 
-    await fs.writeFile(filePath, JSON.stringify(formatted, null, 2), "utf8");
+    const temporary = `${filePath}.${randomUUID()}.tmp`;
+    try {
+        await fs.writeFile(temporary, JSON.stringify(formatted, null, 2), { encoding: "utf8", flag: "wx" });
+        await fs.rename(temporary, filePath);
+    } finally {
+        // La limpieza no puede convertir un reemplazo exitoso en un fallo.
+        await fs.unlink(temporary).catch(() => undefined);
+    }
 }
 
 export async function placeMapNpc(
     mapsSourceDir: string,
     rawPlacement: unknown,
     options: {
+        persist?: typeof saveMapNpcPlacements;
         maxNpcs?: number;
         isTileBlocked?: (x: number, y: number) => boolean;
         isValidNpcIndex?: (npcIndex: number) => boolean | Promise<boolean>;
@@ -217,7 +226,7 @@ export async function placeMapNpc(
         }
 
         const updated = [...currentPlacements, placement];
-        await saveMapNpcPlacements(mapsSourceDir, placement.mapNum, updated);
+        await (options.persist ?? saveMapNpcPlacements)(mapsSourceDir, placement.mapNum, updated);
 
         return { ok: true, placements: sortPlacements(updated) };
     });
@@ -231,6 +240,7 @@ export async function moveMapNpc(
     toX: number,
     toY: number,
     options: {
+        persist?: typeof saveMapNpcPlacements;
         isTileBlocked?: (x: number, y: number) => boolean;
     } = {},
 ): Promise<{ ok: true; placements: MapNpcPlacement[] } | { ok: false; reason: string }> {
@@ -259,7 +269,7 @@ export async function moveMapNpc(
         const updated = currentPlacements.filter((_, idx) => idx !== sourceIndex);
         updated.push({ ...targetNpc, x: toX, y: toY });
 
-        await saveMapNpcPlacements(mapsSourceDir, mapNum, updated);
+        await (options.persist ?? saveMapNpcPlacements)(mapsSourceDir, mapNum, updated);
         return { ok: true, placements: sortPlacements(updated) };
     });
 }
@@ -269,6 +279,7 @@ export async function removeMapNpc(
     mapNum: number,
     x: number,
     y: number,
+    options: { persist?: typeof saveMapNpcPlacements } = {},
 ): Promise<{ ok: true; placements: MapNpcPlacement[] } | { ok: false; reason: string }> {
     return withMapLock(mapNum, async () => {
         const currentPlacements = await loadMapNpcPlacements(mapsSourceDir, mapNum);
@@ -278,7 +289,7 @@ export async function removeMapNpc(
             return { ok: false, reason: `No se encontró ningún NPC en (${x}, ${y}) para remover del mapa ${mapNum}.` };
         }
 
-        await saveMapNpcPlacements(mapsSourceDir, mapNum, filtered);
+        await (options.persist ?? saveMapNpcPlacements)(mapsSourceDir, mapNum, filtered);
         return { ok: true, placements: sortPlacements(filtered) };
     });
 }
