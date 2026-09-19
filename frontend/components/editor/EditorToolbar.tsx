@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
     createTerrainBrush,
     useEditorStore,
@@ -343,7 +344,8 @@ function ConfirmDialog({
         },
     }[action];
 
-    return (
+    // El blur de la barra crea un contexto que deja el dialogo debajo del lienzo.
+    return createPortal(
         <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
             role="dialog"
@@ -378,6 +380,7 @@ function ConfirmDialog({
                     </button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 }
