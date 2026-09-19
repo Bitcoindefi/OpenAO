@@ -20,6 +20,7 @@ type EditorAction = "publish" | "discard" | "revert";
 export default function EditorToolbar() {
     const {
         mapNum,
+        access, protectedOverride, setProtectedOverride, canWriteMap,
         setMapNum,
         tool,
         setTool,
@@ -36,6 +37,8 @@ export default function EditorToolbar() {
     );
     const [error, setError] = useState<string | null>(null);
 
+    useEffect(() => { setPendingAction(null); }, [mapNum, protectedOverride]);
+
     const draftTiles = status?.draft ?? 0;
     const draftEntities = status?.draftEntities ?? 0;
     const publishedTiles = status?.published ?? 0;
@@ -47,16 +50,17 @@ export default function EditorToolbar() {
         draftTotal + publishedTiles + publishedEntities > 0;
 
     const runAction = async (action: EditorAction) => {
+        if (!canWriteMap) return;
         setIsBusy(action);
         setError(null);
 
         try {
             if (action === "publish") {
-                await publishMapChanges(mapNum);
+                await publishMapChanges(mapNum, protectedOverride);
             } else if (action === "discard") {
-                await discardMapDrafts(mapNum);
+                await discardMapDrafts(mapNum, protectedOverride);
             } else {
-                await revertMapChanges(mapNum);
+                await revertMapChanges(mapNum, protectedOverride);
             }
 
             await refreshMapData();
@@ -144,7 +148,7 @@ export default function EditorToolbar() {
                 >
                     Mapa
                 </label>
-                <input
+                {access.isGameDataAdmin ? <input
                     id="editor-map-input"
                     type="number"
                     min={1}
@@ -157,8 +161,23 @@ export default function EditorToolbar() {
                         }
                     }}
                     className="w-20 rounded-lg border border-white/10 bg-stone-950/60 px-2 py-1 text-xs text-stone-200 focus:border-amber-400/50 focus:outline-none"
-                />
+                /> : (
+                    <select id="editor-map-input" value={mapNum}
+                        className="rounded-lg bg-stone-950 px-2 py-1 text-xs text-stone-200"
+                        onChange={(event) => setMapNum(Number(event.target.value))}>
+                        {access.editableMapIds.map((id) => <option key={id} value={id}>{id}</option>)}
+                    </select>
+                )}
             </div>
+            {access.protectedMapIds.includes(mapNum) && (
+                <label className="text-xs text-amber-200">
+                    {access.isGameDataAdmin ? <>
+                        <input type="checkbox" checked={protectedOverride}
+                            onChange={(event) => setProtectedOverride(event.target.checked)} />
+                        {` Autorizar edicion del mapa protegido ${mapNum}`}
+                    </> : "Mapa protegido: solo lectura"}
+                </label>
+            )}
 
             <div className="mx-2 h-6 w-px bg-white/10" />
 
@@ -167,6 +186,7 @@ export default function EditorToolbar() {
                     <button
                         key={button.key}
                         type="button"
+                        disabled={!canWriteMap}
                         onClick={button.onClick}
                         title={button.label}
                         className={`flex h-9 w-9 items-center justify-center rounded-lg border text-sm transition ${
@@ -186,7 +206,7 @@ export default function EditorToolbar() {
                 <button
                     type="button"
                     onClick={() => setPendingAction("publish")}
-                    disabled={isBusy !== null || draftTotal === 0}
+                    disabled={!canWriteMap || isBusy !== null || draftTotal === 0}
                     className="rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-400/20 disabled:opacity-40"
                 >
                     {isBusy === "publish" ? "Publicando..." : "Publicar"}
@@ -194,7 +214,7 @@ export default function EditorToolbar() {
                 <button
                     type="button"
                     onClick={() => setPendingAction("discard")}
-                    disabled={isBusy !== null || draftTotal === 0}
+                    disabled={!canWriteMap || isBusy !== null || draftTotal === 0}
                     className="rounded-lg border border-red-400/40 bg-red-400/10 px-3 py-1.5 text-xs font-medium text-red-200 transition hover:bg-red-400/20 disabled:opacity-40"
                 >
                     {isBusy === "discard" ? "Descartando..." : "Descartar borradores"}
@@ -202,7 +222,7 @@ export default function EditorToolbar() {
                 <button
                     type="button"
                     onClick={() => setPendingAction("revert")}
-                    disabled={isBusy !== null || !hasAnything}
+                    disabled={!canWriteMap || isBusy !== null || !hasAnything}
                     className="rounded-lg border border-white/10 bg-stone-950/60 px-3 py-1.5 text-xs font-medium text-stone-300 transition hover:border-white/25 hover:text-stone-100 disabled:opacity-40"
                 >
                     {isBusy === "revert" ? "Revirtiendo..." : "Revertir"}

@@ -27,7 +27,7 @@ type PaletteTab = "terrain" | "uploaded";
  * independientes, no una sola con dos encabezados pegajosos.
  */
 export default function TerrainPalette() {
-    const { terrain, tool, setTool, addRecent, refreshMapData } =
+    const { terrain, tool, setTool, addRecent, refreshMapData, access } =
         useEditorStore();
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [isUploading, setIsUploading] = useState(false);
@@ -116,7 +116,8 @@ export default function TerrainPalette() {
                 />
                 <button
                     type="button"
-                    disabled={isUploading}
+                    disabled={isUploading || !access.isGameDataAdmin}
+                    title={access.isGameDataAdmin ? undefined : "La subida de graficos requiere administrador"}
                     onClick={() => fileInputRef.current?.click()}
                     className="flex-1 rounded-lg border border-white/10 bg-stone-950/60 px-3 py-2 text-xs text-stone-300 transition hover:border-amber-400/50 hover:text-amber-200 disabled:opacity-50"
                 >
