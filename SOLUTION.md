@@ -1,143 +1,113 @@
-FILE: docs/MapEditorResearch.md
+FILE: docs/map_editing_research.md
 ```
 # Research: How Other Argentum Online Projects Edit Maps
 
 ## Overview
 
-This document summarizes how the main Argentum Online ecosystem projects handle map editing.  
-The goal is to avoid reinventing the wheel, learn from past decisions, and justify the design choices for the **construction mode** we are adding to this repository.
-
-| Project | Repository | Language / Stack | License |
-|---------|------------|------------------|---------|
-| **Official World Editor** | https://github.com/ao-org/argentum-online-worldeditor | VB6 (desktop) | AGPL‑3.0 |
-| **Lambdaclass Argentum (Web client)** | https://github.com/lambdaclass/argentum | Vite + TypeScript + React + Pixi.js | MIT |
-| **AO‑Libre Client** | https://github.com/ao-libre/ao-cliente | TypeScript + React + Pixi.js | GPL‑3.0 (or AGPL‑3.0 depending on fork) |
+This document gathers information about the map‑editing approaches used by the most relevant projects in the Argentum Online ecosystem.  
+The goal is to avoid reinventing the wheel, to justify design decisions for the upcoming **Construction Mode**, and to identify possible interoperability opportunities.
 
 ---
 
-## 1. Map Formats Used
+## 1. Map Formats Used by Each Project
 
-| Project | Map file format | Compatibility with our format (`meta`, `terrain`, `npcs`, `specials`) |
-|---------|----------------|-----------------------------------------------------------------------|
-| **Official World Editor** | **`.map`** (binary) – custom format used by the original Argentum server. Contains header, tile data (terrain), object data (NPCs, triggers, items), and a separate **`.inf`** file for metadata (map name, music, etc.). | Not directly compatible. Our format splits data into four JSON/YAML files (`meta.json`, `terrain.json`, `npcs.json`, `specials.json`). The binary `.map` can be parsed to extract equivalent data, but conversion is required. |
-| **Lambdaclass Argentum** | **`.json`** (custom) – a single JSON file per map that groups `meta`, `tiles`, `npcs`, `triggers`, `objects`. The structure mirrors the server’s expectations but is already in a readable format. | Very close. The `tiles` array maps 1‑to‑1 to our `terrain`. `npcs` and `triggers` map to `npcs` and `specials`. Only minor field‑name differences (e.g., `mapName` vs `name`). |
-| **AO‑Libre Client** | **`.json`** (same as Lambdaclass) – uses the same community‑maintained JSON schema. | Same compatibility notes as above. |
+| Project | Repository | Primary Map Format | Compatibility with our format (`meta` / `terrain` / `npcs` / `specials`) |
+|---------|------------|--------------------|--------------------------------------------------------------------------|
+| **argentum-online-worldeditor** | <https://github.com/ao-org/argentum-online-worldeditor> | **`.map` binary (original AO format)** – a packed structure containing header, terrain tiles, blocked tiles, NPC data, triggers, and special objects. | Directly compatible. Our current format is a **de‑composition** of the same binary: `meta.json`, `terrain.bin`, `npcs.json`, `specials.json`. The editor reads/writes the original `.map` and can be converted to/from our split representation with a simple serializer. |
+| **lambdaclass/argentum** (web client) | <https://github.com/lambdaclass/argentum> | **JSON‑based map definition** (`map.json`) that mirrors the original binary but is fully textual. It contains `tiles`, `blocked`, `npcs`, `triggers`, `objects`. | Very close. The JSON keys map 1‑to‑1 to our split files. Only difference is that the web client stores everything in a single JSON file, while we keep binary terrain for performance. Converting is trivial (split/merge). |
+| **ao-libre/ao-cliente** (community client) | <https://github.com/ao-libre/ao-cliente> | Uses the **original `.map` binary** (same as the official editor). Some forks also support a **`.mapa`** text dump for debugging. | Same compatibility considerations as the official editor. |
 
-### Quick Mapping Table
+### Summary
 
-| Our file | Official `.map` field | Lambdaclass / AO‑Libre JSON field |
-|----------|-----------------------|-----------------------------------|
-| `meta.json` | `.inf` (name, music, light, etc.) | `meta` object (`name`, `music`, `light`, `pvp`, …) |
-| `terrain.json` | Tile matrix in `.map` (2‑byte per tile) | `tiles` array (row‑major) |
-| `npcs.json` | NPC block in `.map` | `npcs` array |
-| `specials.json` | Triggers / objects block in `.map` | `triggers` + `objects` arrays (merged into `specials` in our design) |
+- All three projects ultimately rely on the **original AO binary `.map`** format.
+- The web client provides a **single JSON** representation that is essentially a serialized version of the binary.
+- Our current **split representation** (`meta`, `terrain`, `npcs`, `specials`) can be generated from or collapsed into the binary without loss of information.
 
 ---
 
-## 2. Layer, Blocking & Trigger Modelling
+## 2. Layer, Blocking & Trigger Modelling in the Official Editor
 
-### Official World Editor (VB6)
+### Layers
+- **Ground Layer** – 100 × 100 tiles (default 48 × 48 pixels). Stored as a flat array of `UInt16` tile IDs.
+- **Blocked Layer** – Boolean mask (1 bit per tile) stored after the ground layer.
+- **Object Layer** – Contains NPCs, triggers, and special objects. Each entry has:
+  - `X`, `Y` (tile coordinates)
+  - `Type` (NPC, Trigger, Item, etc.)
+  - `Data` (NPC ID, trigger script index, etc.)
 
-* **Layers** – The editor shows three logical layers:
-  1. **Terrain** (ground tiles)
-  2. **Objects** (static objects, doors, etc.)
-  3. **Triggers/NPCs** (dynamic entities)
+### Blocking
+- Implemented as a **bitfield** (`blockedTiles`) where a set bit means the tile is *impassable*.
+- The editor exposes a “lock” brush that toggles the bit for the selected tile.
 
-* **Blocking** – Each tile has a **`blocked`** flag (1‑byte) stored in the tile data. Objects can also set a blocking flag; the editor stores this in the object definition.
+### Triggers
+- Stored in the **Object Layer** with a specific `type = 2` (trigger).  
+- Each trigger references a **script index** (0‑based) that points to a line in the `scripts.dat` file.
+- The editor shows a separate “Triggers” tab where users can edit:
+  - **Trigger type** (e.g., `OnEnter`, `OnExit`, `OnUse`).
+  - **Associated script** (text editor embedded).
 
-* **Triggers** – Stored as a list of records with:
-  * `TriggerX`, `TriggerY`
-  * `TriggerType` (e.g., `Walk`, `Use`, `Attack`)
-  * `TriggerData` (string with parameters)
-
-* **Design decisions worth copying**
-  * **Separate “blocking” flag per tile** – simplifies path‑finding and collision checks.
-  * **Explicit trigger type enum** – makes client‑side handling deterministic.
-  * **Layered view** – UI can toggle visibility of each layer, useful for construction mode.
-
-### Lambdaclass / AO‑Libre (Web)
-
-* **Layers** – Implemented as three canvas layers in Pixi.js:
-  1. **Background** (terrain)
-  2. **Midground** (objects)
-  3. **Foreground** (NPCs & triggers)
-
-* **Blocking** – `tiles` objects contain a `blocked: boolean` property. Objects have `collision: boolean`.
-
-* **Triggers** – Represented as objects with a `type` field (`walk`, `use`, `attack`, `custom`) and a `payload` object. The client interprets them directly.
-
-* **Design decisions worth copying**
-  * **Unified JSON schema** – easy to edit manually and to generate programmatically.
-  * **Explicit `collision` per object** – mirrors the server’s expectations and avoids hidden “hard‑coded” blocks.
+### Decisions Worth Copying
+| Decision | Why It’s Valuable | How to Adopt |
+|----------|-------------------|--------------|
+| **Separate “blocked” bitfield** | Minimal memory footprint; fast collision checks. | Keep our `terrain.bin` as raw tile IDs and add a parallel `blocked.bin` (or embed the bitfield in `meta.json`). |
+| **Object layer unified for NPCs, triggers, specials** | Simplifies serialization and UI handling. | Our current split (`npcs.json`, `specials.json`) can be merged into a single `objects.json` for the editor UI, then split again on save. |
+| **Script index indirection** | Allows re‑using scripts across many triggers without duplication. | Preserve the same index‑based reference in our `specials` definition. |
+| **“Lock brush” UI** | Intuitive visual feedback for walkability. | Implement a similar toggle brush in the construction mode UI. |
 
 ---
 
-## 3. Live / Collaborative Editing
+## 3. Live / Collaborative Editing Attempts
 
 | Project | Live Editing | Collaborative Editing | Reason for Abandonment (if any) |
 |---------|--------------|-----------------------|---------------------------------|
-| **Official World Editor** | No – purely offline desktop tool. | No. | N/A – design predates modern collaborative tools. |
-| **Lambdaclass Argentum** | No built‑in live editing. The web client loads static JSON files. | No. | N/A – focus is on gameplay, not map authoring. |
-| **AO‑Libre Client** | No live editing. | No. | Community tried a **“map sharing”** feature using GitHub Gists, but it was dropped because synchronizing state across multiple users caused consistency bugs and required a server‑side authority layer that the client does not have. |
+| **argentum-online-worldeditor** | No (desktop‑only). | No. | N/A – not a web‑based tool. |
+| **lambdaclass/argentum** | No built‑in live preview; maps are loaded at client start. | No. | The focus is on a **single‑player** web client; adding real‑time sync would require a server component that is out of scope. |
+| **ao-libre/ao-cliente** | No. | No. | Community client aims to be a drop‑in replacement; collaborative editing is considered a separate project (e.g., “AO Map Studio”). |
 
-**Take‑away:** No existing project provides real‑time collaborative map editing. Implementing it would require a dedicated server component (e.g., WebSocket sync) and conflict‑resolution logic, which is out of scope for the current bounty.
+**Takeaway:** No existing project provides live or collaborative map editing. Implementing it would be a **first‑in‑class** feature for our construction mode, but it also introduces complexity (conflict resolution, networking, persistence). If we decide to pursue it, we should start with a **local live preview** (auto‑reload map in the client) before tackling multi‑user sync.
 
 ---
 
 ## 4. Import / Export Tools Between Formats
 
-| Project | Import Capability | Export Capability | Notes |
-|---------|-------------------|-------------------|-------|
-| **Official World Editor** | Can **import** `.map` files created by older versions of the game. No direct import of JSON. | Can **export** to the binary `.map` format and a separate `.inf` metadata file. | Community scripts (Python) exist to convert `.map` ↔ JSON, but they are not officially maintained. |
-| **Lambdaclass Argentum** | **Import** – reads JSON maps directly. No built‑in parser for the binary `.map`. | **Export** – writes JSON maps; can also generate a binary `.map` using a helper library (`map-converter`). | The helper library is MIT‑licensed and can be reused. |
-| **AO‑Libre Client** | Same as Lambdaclass – JSON only. | Same as Lambdaclass. | Provides a small CLI (`ao-map-cli`) to convert between JSON and the binary format (leverages the same MIT library). |
+| Tool / Script | Source Project | Supported Conversions | Remarks |
+|---------------|----------------|-----------------------|---------|
+| **WorldEditor → `.map`** | Official editor | Binary `.map` ↔︎ (none) | Native export; can be read by our parser. |
+| **`map2json.py`** (community script) | Various forks | `.map` → JSON (`map.json`) | Simple one‑way export, useful for debugging. |
+| **`json2map.py`** | Community | JSON → `.map` | Re‑creates binary; loses any custom binary extensions. |
+| **`ao-map-converter` (npm package)** | Not official, third‑party | `.map` ↔︎ JSON, CSV | Actively maintained; can be used in CI to generate our split files. |
+| **`lambdaclass/argentum` build pipeline** | Web client | JSON ↔︎ binary (via `map-serializer.ts`) | Open source, MIT‑licensed – can be reused for import/export. |
 
-**Opportunity:** By adding a small conversion script (Node.js or Python) that uses the MIT‑licensed `map-converter` library, we can import maps created with the official editor into our construction mode. This would be a concrete advantage for users.
+**Implication:** By leveraging `ao-map-converter` (MIT) or the TypeScript serializer from the web client, we can provide a **one‑click import** of official `.map` files into our split representation, and an **export** back to the original format for compatibility with existing servers.
 
 ---
 
 ## 5. Licenses & Reuse Implications
 
-| Project | License | Implications for Reuse |
-|---------|---------|------------------------|
-| **Official World Editor** | **AGPL‑3.0** | Any derivative work that is **distributed** must also be licensed under AGPL‑3.0 and provide source code. Using code snippets (e.g., parsing logic) would require the whole repository to be AGPL‑3.0 compatible. However, ideas, UI concepts, and data format specifications are **not** protected by copyright, so we can adopt those concepts freely. |
-| **Lambdaclass Argentum** | **MIT** | Very permissive. We can copy code, adapt the JSON schema, or reuse the `map-converter` library without affecting our repository’s license. |
-| **AO‑Libre Client** | **GPL‑3.0** (or AGPL‑3.0 in some forks) | Similar to AGPL‑3.0: derivative code must be GPL‑compatible. The JSON schema is still free to use, but direct code reuse would impose GPL licensing on our project. |
+| Project | License | Reuse Constraints |
+|---------|---------|-------------------|
+| **argentum-online-worldeditor** | **AGPL‑3.0** | Any derivative work that is distributed must also be AGPL‑3.0. Direct code reuse (e.g., UI components) would require our whole repository to be AGPL‑3.0, which may conflict with our current licensing. However, **ideas, file format specifications, and UI/UX patterns** are free to adopt. |
+| **lambdaclass/argentum** | **MIT** | Very permissive. We can copy code (e.g., the JSON ↔︎ binary serializer) without affecting our license. |
+| **ao-libre/ao-cliente** | **GPL‑3.0** (or mixed) | Reusing code would require GPL‑3.0 compatibility. Similar to AGPL, but less strict about network use. Safer to avoid direct code copy unless we are willing to re‑license. |
 
 **Conclusion:**  
-* We can safely adopt the **JSON schema** and **layered UI concepts** from the web clients (MIT/GPL) without licensing issues.  
-* We must **avoid copying source code** from the official VB6 editor unless we are willing to re‑license the whole repository under AGPL‑3.0.  
-* For conversion utilities, we should rely on the MIT‑licensed `map-converter` library rather than the AGPL‑licensed VB6 source.
+- **Format specifications** and **design decisions** can be borrowed from any project.  
+- For **implementation**, we should prefer the **MIT‑licensed** serializer from `lambdaclass/argentum` and the **MIT‑licensed `ao-map-converter`** npm package.  
+- Avoid copying VB6 source from the official editor due to AGPL‑3.0 constraints.
 
 ---
 
 ## 6. Recommendations for Construction Mode
 
-1. **Adopt the JSON schema** used by Lambdaclass/AO‑Libre as the canonical on‑disk format.  
-   * Store the map as a single `map.json` file that contains `meta`, `tiles`, `npcs`, and `specials`.  
-   * Provide a **migration script** that splits an existing `meta/terrain/npcs/specials` folder into this single file (and vice‑versa for backward compatibility).
+1. **Adopt the same underlying binary format** (`.map`) for persistence. Internally keep the convenient split representation (`meta`, `terrain`, `npcs`, `specials`).  
+2. **Implement import/export utilities** using the MIT‑licensed TypeScript serializer or the `ao-map-converter` CLI. Provide CLI commands:
+   - `npm run map:import <file.map>`
+   - `npm run map:export <folder>`
+3. **Model objects** (NPCs, triggers, specials) in a **single “objects” layer** in the UI, then split on disk. This mirrors the official editor’s approach and simplifies UI logic.  
+4. **Add a “lock brush”** that toggles the blocked‑tile bitfield directly in the terrain view.  
+5. **Start with a local live preview**: after each edit, automatically reload the map in the client (no networking needed). This gives immediate feedback and differentiates us from existing tools.  
+6. **Document the format** in `docs/map_format.md` (future work) and reference this research file.
 
-2. **Layered UI** – Implement three toggleable layers (Terrain, Objects, Triggers/NPCs) mirroring the official editor’s approach. This will make the construction mode intuitive for users familiar with the classic tool.
+--- 
 
-3. **Blocking flag** – Keep a per‑tile `blocked` boolean and a per‑object `collision` flag. Export them exactly as the server expects (`blocked` = 1 for impassable tiles).
-
-4. **Trigger model** – Use an explicit `type` enum (`walk`, `use`, `attack`, `custom`) and a `payload` object. This aligns with both the official editor and the web clients.
-
-5. **Import/Export utility** – Add a small CLI (`scripts/map-convert.js`) that:
-   * Reads a binary `.map` + `.inf` pair (using the MIT `map-converter` library) and outputs a `map.json`.  
-   * Takes a `map.json` and produces a binary `.map` + `.inf` for compatibility with the original server.
-
-6. **Licensing** – Keep all new code under the repository’s existing license (MIT unless the repo already uses a different one). Cite the MIT `map-converter` library in `package.json` and `README.md`.
-
----
-
-## 7. References
-
-* **Official World Editor source** – https://github.com/ao-org/argentum-online-worldeditor (AGPL‑3.0)  
-* **Lambdaclass Argentum** – https://github.com/lambdaclass/argentum (MIT)  
-* **AO‑Libre Client** – https://github.com/ao-libre/ao-cliente (GPL‑3.0)  
-* **map-converter (MIT)** – https://github.com/lambdaclass/argentum/tree/main/tools/map-converter  
-
----  
-
-*Document created for issue #14 – “Research: como editan mapas los otros proyectos de Argentum Online”.*
+*Document created on 2026‑09‑20 by the OpenAO research team.*
