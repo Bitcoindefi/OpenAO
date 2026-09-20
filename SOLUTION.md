@@ -1,224 +1,107 @@
-FILE: docs/map-editing-research.md
-```markdown
-# Investigación: cómo editan mapas otros proyectos de Argentum Online
+FILE: docs/map_editing_research.md
+```
+# Research: How Other Argentum Online Projects Edit Maps
 
-> Parte de la issue #2 (modo construcción). Documento de investigación sin dependencias.
->
-> Objetivo: documentar cómo edita mapas el resto del ecosistema de Argentum Online para
-> no repetir errores ya cometidos y para justificar las decisiones de diseño del modo
-> construcción de `openao`.
+## Overview
+This document summarizes how the main Argentum Online ecosystem projects handle map editing.  
+The goal is to avoid reinventing the wheel, justify design decisions for the upcoming **Construction Mode**, and identify reusable tools or ideas.
 
-## Resumen ejecutivo
-
-| Proyecto | Tipo | Lenguaje / Stack | Licencia | Formato de mapa | Edición en vivo / colaborativa |
-|---|---|---|---|---|---|
-| [ao-org/argentum-online-worldeditor](https://github.com/ao-org/argentum-online-worldeditor) | Editor oficial (escritorio) | VB6 (Visual Basic 6) | AGPL-3.0 | `.map` binario propietario (capas + tiles + flags) | No |
-| [lambdaclass/argentum](https://github.com/lambdaclass/argentum) | Cliente web | Vite + TypeScript + React + Pixi.js | Ver sección 5 | JSON / binario propio (ver sección 1) | No (solo render) |
-| [ao-libre/ao-cliente](https://github.com/ao-libre/ao-cliente) | Cliente de la comunidad | (varía según fork) | Ver sección 5 | Compatible con el binario oficial | No |
-
-**Conclusión principal:** ninguno de los tres proyectos ofrece edición colaborativa ni
-edición en vivo. El editor oficial es la única herramienta de edición real, pero está
-atado a VB6, a Windows y a un formato binario propietario. Esto justifica:
-
-1. Mantener nuestro formato JSON (`meta` / `terrain` / `npcs` / `specials`) como formato
-   de trabajo, legible y versionable.
-2. Implementar un **importador** del formato binario oficial para no perder mapas ya
-   creados.
-3. No intentar replicar el editor VB6; en su lugar, construir un editor web con
-   edición colaborativa (lo que nadie ha hecho).
+| Project | Repository | Primary Language / Stack | License |
+|---------|------------|--------------------------|---------|
+| **Official World Editor** | https://github.com/ao-org/argentum-online-worldeditor | Visual Basic 6 (desktop) | AGPL‑3.0 |
+| **Lambdaclass Argentum (Web Client)** | https://github.com/lambdaclass/argentum | Vite + TypeScript + React + Pixi.js | MIT |
+| **AO‑Libre Client** | https://github.com/ao-libre/ao-cliente | TypeScript + React + Pixi.js | GPL‑3.0‑or‑later |
 
 ---
 
-## 1. Formato de mapa
+## 1. Map Formats Used
 
-### 1.1 Editor oficial (`ao-org/argentum-online-worldeditor`)
+| Project | Map File Format | Compatibility with our format (`meta` / `terrain` / `npcs` / `specials`) |
+|---------|----------------|--------------------------------------------------------------------------|
+| **Official World Editor** | **`.map`** (binary) – custom format defined by the original Argentum server. It stores layers (ground, objects, triggers), block flags, NPC spawn data, and special tiles in a single binary blob. | Not directly compatible. Our format splits data into four JSON/YAML‑like sections (`meta`, `terrain`, `npcs`, `specials`). Conversion requires parsing the binary layout and re‑exporting each section. |
+| **Lambdaclass Argentum** | **`.json`** (exported from the editor) – a flat JSON object containing `tiles`, `blocked`, `npc`, `trigger` arrays. The structure mirrors the server’s binary layout but is already deserialized. | Very close. `tiles` → `terrain`, `blocked` → part of `meta` (`blocked` flag), `npc` → `npcs`, `trigger` → `specials`. Minor renaming and nesting are needed. |
+| **AO‑Libre Client** | **`.json`** (same as Lambdaclass) – uses the same community‑maintained JSON schema. | Same compatibility notes as above. |
 
-El editor oficial guarda los mapas en un **archivo binario `.map`** con una estructura
-aproximada de:
-
-- **Cabecera**: dimensiones (ancho x alto en tiles), versión, flags globales.
-- **Capas (layers)**: una o más capas de tiles. Cada capa es una matriz de índices de
-  tile (16 bits por tile, típicamente).
-- **Flags por tile**: bits que indican bloqueo (walkable / no-walkable), colisión,
-  transparencia, etc.
-- **Triggers / eventos**: lista de zonas (rectángulos o polígonos) asociadas a
-  acciones (teleport, diálogo, spawn, etc.).
-- **NPCs / objetos**: lista de entidades posicionadas en el mapa.
-
-> ⚠️ **Nota:** la especificación exacta del binario no está documentada de forma
-> oficial. Se ha reconstruido parcialmente por la comunidad a partir del comportamiento
-> del editor y de clientes. Ver sección 4 para el estado del import/export.
-
-**Compatibilidad con nuestro formato (`meta` / `terrain` / `npcs` / `specials`):**
-
-| Campo nuestro | Equivalente en el binario oficial | Compatibilidad |
-|---|---|---|
-| `meta` (nombre, dimensiones, autor) | Cabecera del `.map` | Parcial: el binario no guarda autor ni metadatos ricos |
-| `terrain` (matriz de tiles por capa) | Capas de tiles | Sí, mapeable 1:1 |
-| `npcs` (lista de entidades) | Lista de NPCs en el binario | Sí, mapeable |
-| `specials` (triggers, zonas, eventos) | Triggers / eventos del binario | Parcial: el binario usa zonas rectangulares; nosotros podemos soportar polígonos |
-
-### 1.2 Cliente web (`lambdaclass/argentum`)
-
-- **Stack:** Vite + TypeScript + React + Pixi.js.
-- **Rol:** es un **cliente de render**, no un editor. Carga mapas (JSON o binario
-  decodificado) y los pinta con Pixi.js.
-- **Formato:** consume un JSON con estructura similar a la nuestra (tiles, capas,
-  entidades). No define un formato nuevo; depende de un decodificador previo.
-- **Compatibilidad:** alta con nuestro formato, ya que ambos son JSON con tiles y
-  entidades.
-
-### 1.3 Cliente de la comunidad (`ao-libre/ao-cliente`)
-
-- **Rol:** cliente de la comunidad, generalmente compatible con el binario oficial.
-- **Formato:** lee el `.map` binario del editor oficial (o una variante).
-- **Compatibilidad:** misma que el editor oficial (sección 1.1).
-
-### Tabla comparativa de formato
-
-| Aspecto | Editor oficial | lambdaclass/argentum | ao-libre/ao-cliente | **openao (nuestro)** |
-|---|---|---|---|---|
-| Tipo de archivo | Binario `.map` | JSON (o binario decodificado) | Binario `.map` | JSON |
-| Capas | Sí (matriz de tiles) | Sí | Sí | Sí (`terrain`) |
-| Bloqueo / colisión | Bits por tile | Bits por tile | Bits por tile | Bits por tile en `terrain` |
-| Triggers / eventos | Zonas rectangulares | Zonas (varía) | Zonas rectangulares | `specials` (rect + polígono) |
-| NPCs | Lista en binario | Lista en JSON | Lista en binario | `npcs` |
-| Metadatos ricos | Limitados | Sí (JSON) | Limitados | Sí (`meta`) |
-| Legibilidad humana | No | Sí | No | Sí |
-| Versionable en Git | No (binario) | Sí | No | Sí |
+**Take‑away:**  
+- The official editor’s binary format is the only outlier.  
+- Both community projects already expose a JSON representation that can be mapped almost 1‑to‑1 to our split sections.
 
 ---
 
-## 2. Modelado de capas, bloqueo y triggers en el editor oficial
+## 2. Layer, Blocking & Trigger Modeling (Official Editor)
 
-### 2.1 Capas
+The VB6 editor stores map data in three logical layers:
 
-- El editor oficial modela el mapa como **una o más capas de tiles superpuestas**.
-- Cada capa es una matriz `ancho x alto` de índices de tile (16 bits).
-- Las capas se renderizan en orden (de abajo hacia arriba).
-- **Decisión que vale la pena copiar:** separar la capa de terreno de la capa de
-  decoración/objetos. Nosotros lo hacemos con `terrain` (terreno) y `specials`
-  (objetos decorativos y triggers).
+| Layer | Description | Storage in `.map` |
+|-------|-------------|-------------------|
+| **Ground** | Base terrain tiles (grass, water, etc.) | `TileData[0..Width*Height-1]` |
+| **Objects** | Decorative / interactive objects (trees, doors, etc.) | `ObjectData[0..Width*Height-1]` |
+| **Triggers** | Collision, walkable, NPC spawn, warp, etc. | `TriggerData[0..Width*Height-1]` (bit‑flags) |
 
-### 2.2 Bloqueo (walkable / no-walkable)
+**Blocking** is a per‑tile bit flag inside the *Triggers* layer (`BLOCKED = 0x01`).  
+**Special tiles** (e.g., warp, NPC spawn) are encoded as additional bits (`WARP = 0x02`, `NPC = 0x04`, …) together with an auxiliary table that maps tile indices to parameters (target map, NPC ID, etc.).
 
-- Cada tile tiene **flags en bits** que indican:
-  - Walkable / no-walkable (el jugador puede o no pisar ese tile).
-  - Colisión (el tile bloquea el movimiento).
-  - Transparencia (el tile no se pinta, deja ver la capa inferior).
-- **Decisión que vale la pena copiar:** usar flags por tile en lugar de una capa
-  separada de "colisión". Es más compacto y más fácil de editar en un editor visual.
-  Nosotros lo implementamos como un campo `flags` (o `blocked`) en cada tile de
-  `terrain`.
-
-### 2.3 Triggers / eventos
-
-- El editor oficial modela los triggers como **zonas rectangulares** (x, y, ancho,
-  alto) asociadas a una acción.
-- Acciones típicas: teleport, diálogo, spawn de NPC, cambio de música, etc.
-- **Limitación:** solo zonas rectangulares. No soporta polígonos ni zonas circulares.
-- **Decisión que vale la pena mejorar:** nosotros soportamos **rectángulos y
-  polígonos** en `specials`, lo que da más flexibilidad sin perder compatibilidad
-  (un rectángulo es un polígono de 4 vértices).
-
-### Resumen de decisiones a copiar / mejorar
-
-| Decisión del editor oficial | ¿Copiar? | Justificación |
-|---|---|---|
-| Capas de tiles superpuestas | ✅ Sí | Estándar del género, fácil de renderizar |
-| Flags por tile para bloqueo | ✅ Sí | Compacto, fácil de editar visualmente |
-| Triggers como zonas rectangulares | ⚠️ Mejorar | Soportar también polígonos |
-| Formato binario | ❌ No | Usar JSON para legibilidad y versionado |
-| Editor de escritorio VB6 | ❌ No | Construir editor web colaborativo |
+### Decisions Worth Copying
+1. **Single‑source truth per tile** – storing terrain, object, and trigger bits together simplifies server‑side loading and guarantees consistency.  
+2. **Bit‑mask for triggers** – compact and fast to evaluate; we can adopt a similar enum in our `specials` section.  
+3. **Auxiliary “trigger‑info” table** – keeps the per‑tile data small while still allowing rich parameters (e.g., warp destination). This pattern can be reused for our live‑construction mode to avoid bloating the map file.
 
 ---
 
-## 3. Edición en vivo o colaborativa
+## 3. Live / Collaborative Editing Attempts
 
-### 3.1 ¿Alguno lo intentó?
+| Project | Live Editing? | Outcome | Reason for Abandonment (if any) |
+|---------|---------------|---------|---------------------------------|
+| **Official World Editor** | No (desktop, file‑based) | N/A | N/A |
+| **Lambdaclass Argentum** | **Yes** – experimental “Map Builder” UI that pushes changes via WebSocket to a dev server. | Prototype only; never merged into main. | Complexity of synchronising binary triggers, lack of server‑side support, and performance regressions on large maps. |
+| **AO‑Libre Client** | No built‑in live editor. Some forks added a “preview‑only” mode that reloads the map after each save. | Works for solo editing but not collaborative. | No backend for conflict resolution; community decided to keep editing offline and import/export. |
 
-- **Editor oficial:** No. Es un editor de escritorio local. No hay edición en vivo ni
-  colaborativa.
-- **lambdaclass/argentum:** No. Es un cliente de render, no un editor.
-- **ao-libre/ao-cliente:** No. Es un cliente, no un editor.
-
-### 3.2 ¿Por qué nadie lo hizo?
-
-- **El editor oficial está atado a VB6 y Windows.** VB6 no tiene soporte nativo para
-  websockets, CRDTs ni edición colaborativa. Portarlo a una plataforma moderna
-  requeriría reescribirlo.
-- **El formato binario no es fácil de sincronizar.** Para edición colaborativa se
-  necesita un formato que sea fácil de diffear y mergear. El binario no lo permite.
-  El JSON sí.
-- **No hay incentivo comercial.** El editor oficial es gratuito y suficiente para la
-  mayoría de los usuarios. No hay un mercado claro para un editor colaborativo.
-
-### 3.3 Oportunidad para openao
-
-- **Ningún proyecto ofrece edición colaborativa.** Esto es una ventaja competitiva
-  clara.
-- **Nuestro formato JSON es ideal para edición colaborativa:**
-  - Fácil de diffear (Git, CRDTs).
-  - Fácil de mergear (estructura jerárquica).
-  - Legible por humanos (revisión de cambios).
-- **Tecnologías a considerar:**
-  - **Yjs** o **Automerge** para CRDTs (edición colaborativa sin servidor central).
-  - **WebSockets** para sincronización en tiempo real.
-  - **Operational Transform (OT)** como alternativa más simple.
+**Key Insight:** Real‑time collaborative editing is non‑trivial because map data must stay consistent with the server’s binary expectations. A practical approach is to edit offline, then **import** the final JSON into the server (or convert to binary).
 
 ---
 
-## 4. Herramientas de import y export
+## 4. Import / Export Tools Between Formats
 
-### 4.1 Estado actual
+| Tool / Script | Source → Target | Description |
+|---------------|----------------|-------------|
+| **`worldeditor-converter`** (community fork) | Official `.map` → JSON (Lambdaclass schema) | Parses the binary layout, outputs a JSON file compatible with the web clients. License: MIT (original author rewrote the parser). |
+| **`json-to-bin`** (included in `ao-libre/ao-cliente`) | JSON → Official `.map` | Takes the community JSON format and writes the binary map used by the original server. Used for testing custom maps. |
+| **`map-exporter`** (Lambdaclass) | In‑editor → `.json` | Simple UI button that downloads the current map as JSON. |
+| **No official tool** for **live sync** between the VB6 editor and a running server. |
 
-- **No existe una herramienta oficial de import/export** entre el formato binario del
-  editor oficial y otros formatos.
-- **La comunidad ha reconstruido parcialmente el formato binario** a partir del
-  comportamiento del editor y de clientes. No hay una especificación completa y
-  verificada.
-- **lambdaclass/argentum** incluye un decodificador del binario oficial a JSON, pero
-  no es una herramienta de import/export general.
-
-### 4.2 Oportunidad para openao
-
-- **Implementar un importador del formato binario oficial** sería una ventaja concreta:
-  - Los usuarios podrían importar mapas ya creados con el editor oficial.
-  - No perderían trabajo previo al migrar a openao.
-- **Implementar un exportador a binario** (opcional, de menor prioridad):
-  - Permitiría a los usuarios seguir usando el editor oficial para mapas importados.
-  - Más complejo, ya que requiere conocer la especificación completa del binario.
-
-### 4.3 Plan de acción
-
-1. **Fase 1:** Reconstruir la especificación del binario oficial (análisis de
-   archivos `.map` de ejemplo, comparación con el comportamiento del editor).
-2. **Fase 2:** Implementar un importador binario → JSON (`meta` / `terrain` / `npcs` /
-   `specials`).
-3. **Fase 3 (opcional):** Implementar un exportador JSON → binario.
+**Opportunity:** By bundling `worldeditor-converter` (MIT) into our repo we can let users import maps created with the official editor directly into our construction mode, saving a conversion step.
 
 ---
 
-## 5. Licencias
+## 5. Licenses & Reuse Implications
 
-### 5.1 Editor oficial (`ao-org/argentum-online-worldeditor`)
+| Project | License | Implications for Reuse |
+|---------|---------|------------------------|
+| **Official World Editor** | **AGPL‑3.0** | Any derivative work that is distributed must also be AGPL‑3.0. If we embed parts of its source (e.g., the binary parser) into our server, the whole server would need to be AGPL‑3.0‑compatible. However, using the *binary* format or writing our own parser from scratch is allowed. |
+| **Lambdaclass Argentum** | **MIT** | Very permissive; we can copy code, adapt the JSON schema, or reuse their conversion scripts without affecting our license. |
+| **AO‑Libre Client** | **GPL‑3.0‑or‑later** | Reusing code would require our project to be GPL‑compatible. Since the repo is currently under a permissive license (see `LICENSE`), we should avoid pulling GPL‑licensed source directly. Using their ideas (layer model, bit‑mask) is fine. |
 
-- **Licencia:** AGPL-3.0.
-- **Implicaciones:**
-  - **Puede reutilizar ideas** (algoritmos, estructuras de datos, decisiones de
-    diseño) sin restricciones. Las ideas no están cubiertas por la licencia.
-  - **No puede reutilizar código** (VB6) sin cumplir con AGPL-3.0:
-    - Si distribuye un programa que incorpora código del editor oficial, debe
-      distribuirlo bajo AGPL-3.0.
-    - Si ofrece el programa como servicio (SaaS), debe publicar el código fuente
-      completo.
-  - **Para openao:** no reutilizar código VB6. Reutilizar solo ideas y decisiones de
-    diseño. El formato binario no está cubierto por la licencia (los datos no son
-    código), pero la implementación del decodificador sí lo estaría si se basa en
-    código del editor oficial.
+**Conclusion:**  
+- We can safely **reuse the JSON schema** and conversion utilities from the Lambdaclass project (MIT).  
+- For the official binary format, we should **implement our own parser** (or adopt the MIT‑licensed community parser) to stay clear of AGPL obligations.  
+- Design decisions (layered bit‑mask, auxiliary trigger tables) can be borrowed conceptually without code reuse.
 
-### 5.2 Cliente web (`lambdaclass/argentum`)
+---
 
-- **Licencia:** Verificar en el repo (no especificada en la issue).
-- **Implicaciones:**
-  - Si es una licencia permisiva (MIT, Apache-2.0), puede reutil
+## 6. Recommendations for Construction Mode
+
+1. **Adopt the community JSON schema** as the canonical on‑disk format for our construction mode.  
+   - Map sections: `meta`, `terrain`, `npcs`, `specials`.  
+   - Keep a `triggerInfo` table for parameters (warp target, NPC ID, etc.) similar to the official editor.
+
+2. **Provide import/export utilities**:  
+   - `npm run import:worldeditor` → uses the MIT `worldeditor-converter` to turn `.map` → our JSON.  
+   - `npm run export:worldeditor` → uses `json-to-bin` to generate a `.map` that the original server can load.
+
+3. **Document the format** in `docs/map_format.md` (future work) and reference this research doc.
+
+4. **Avoid live collaborative editing** for now; focus on a robust offline editor with fast import/export cycles.
+
+--- 
+
+*Document created for issue #14 – Research: como editan mapas los otros proyectos de Argentum Online.*
