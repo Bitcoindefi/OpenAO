@@ -652,3 +652,80 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--  Etapa 5: propuestas y moderacion de mapas de usuario
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Un mapa de usuario y su lugar en el flujo de moderacion.
+--
+-- El contenido del mapa sigue viviendo en game_map_tile_overrides y
+-- game_map_tile_entities: aca solo se guarda quien es el autor, el nombre y en
+-- que punto del flujo esta. Mientras el estado no sea 'published' los
+-- borradores no los ve ningun jugador, porque el endpoint publico de overrides
+-- solo devuelve lo publicado.
+--
+-- Un mapa tiene una sola propuesta vigente: reenviar despues de un rechazo
+-- actualiza esta misma fila en vez de acumular propuestas muertas.
+CREATE TABLE IF NOT EXISTS game_map_proposals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    map_num INTEGER NOT NULL UNIQUE CHECK (map_num > 0),
+    owner_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    entry_x INTEGER NOT NULL DEFAULT 1 CHECK (entry_x > 0),
+    entry_y INTEGER NOT NULL DEFAULT 1 CHECK (entry_y > 0),
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'proposed', 'in_review', 'published', 'rejected')),
+    rejection_reason TEXT,
+    auto_check_report JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reviewed_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    submitted_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+    -- Se setea al publicar y se limpia al rechazar o despublicar. Permite
+    -- despublicar un mapa reportado (que vuelve a la cola como 'in_review')
+    -- sin confundirlo con uno que nunca llego al mundo.
+    published_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Instalaciones que hayan aplicado una version previa del schema.
+ALTER TABLE game_map_proposals
+    ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_game_map_proposals_status
+    ON game_map_proposals(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_game_map_proposals_owner
+    ON game_map_proposals(owner_account_id, updated_at DESC);
+
+-- Reportes de jugadores sobre un mapa ya publicado.
+--
+-- Cualquier jugador puede reportar. El reporte devuelve el mapa a la cola
+-- (status 'in_review') pero no lo despublica solo: bajar el mapa del mundo es
+-- una decision de un moderador. El autor original no pierde los reportes
+-- cuando la propuesta se resuelve, porque quedan como historial.
+CREATE TABLE IF NOT EXISTS game_map_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    proposal_id UUID NOT NULL REFERENCES game_map_proposals(id) ON DELETE CASCADE,
+    reporter_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'resolved', 'dismissed')),
+    resolved_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_map_reports_proposal
+    ON game_map_reports(proposal_id, created_at DESC);
+
+-- Quienes pueden moderar mapas de usuario.
+--
+-- La cola no depende de una sola persona: un admin de game-data suma o quita
+-- moderadores y el flujo escala sin tocar codigo.
+CREATE TABLE IF NOT EXISTS game_map_moderators (
+    account_id UUID PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+    added_by_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

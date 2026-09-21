@@ -512,6 +512,74 @@ export async function publishMap(
     }
 }
 
+/**
+ * Saca del mundo lo publicado de un mapa sin perder el trabajo.
+ *
+ * Los tiles y entidades publicados vuelven a estado borrador: dejan de ser
+ * visibles para los jugadores pero el autor los conserva para corregir. Es la
+ * operacion inversa de publishMap y la que usa un moderador para despublicar
+ * un mapa que ya estaba vivo.
+ */
+export async function unpublishMap(
+    mapNum: number,
+    accountId: string,
+): Promise<{ unpublished: number; unpublishedEntities: number }> {
+    const client = await pool.connect();
+
+    try {
+        await client.query("BEGIN");
+
+        const result = await client.query(
+            `INSERT INTO game_map_tile_overrides
+                 (map_num, x, y, layer, grh_index, blocked, status, updated_by_account_id, updated_at)
+             SELECT map_num, x, y, layer, grh_index, blocked, 'draft', $2, NOW()
+             FROM game_map_tile_overrides
+             WHERE map_num = $1 AND status = 'published'
+             ON CONFLICT (map_num, x, y, layer, status) DO UPDATE
+             SET grh_index = EXCLUDED.grh_index,
+                 blocked = EXCLUDED.blocked,
+                 updated_by_account_id = EXCLUDED.updated_by_account_id,
+                 updated_at = NOW()`,
+            [mapNum, accountId],
+        );
+
+        await client.query(
+            `DELETE FROM game_map_tile_overrides WHERE map_num = $1 AND status = 'published'`,
+            [mapNum],
+        );
+
+        const entitiesResult = await client.query(
+            `INSERT INTO game_map_tile_entities
+                 (map_num, x, y, kind, entity_id, status, updated_by_account_id, updated_at)
+             SELECT map_num, x, y, kind, entity_id, 'draft', $2, NOW()
+             FROM game_map_tile_entities
+             WHERE map_num = $1 AND status = 'published'
+             ON CONFLICT (map_num, x, y, kind, status) DO UPDATE
+             SET entity_id = EXCLUDED.entity_id,
+                 updated_by_account_id = EXCLUDED.updated_by_account_id,
+                 updated_at = NOW()`,
+            [mapNum, accountId],
+        );
+
+        await client.query(
+            `DELETE FROM game_map_tile_entities WHERE map_num = $1 AND status = 'published'`,
+            [mapNum],
+        );
+
+        await client.query("COMMIT");
+
+        return {
+            unpublished: result.rowCount ?? 0,
+            unpublishedEntities: entitiesResult.rowCount ?? 0,
+        };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
 /** Descarta los borradores sin tocar lo que ya esta publicado. */
 export async function discardDrafts(
     mapNum: number,
