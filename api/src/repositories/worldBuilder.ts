@@ -12,6 +12,9 @@ import { validatePngUpload } from "../lib/pngValidation";
  */
 export const UPLOADED_GRAPHIC_INDEX_START = 1_000_000;
 
+/** Ultimo indice de grafico incluido no engine original. */
+export const MAX_ENGINE_GRAPHIC_INDEX = 320_151;
+
 /** Los mapas del juego son de 100x100. */
 export const MAP_SIZE = 100;
 
@@ -198,6 +201,44 @@ export async function listGraphics(limit = 100): Promise<UploadedGraphic[]> {
     }));
 }
 
+export const paletteEntrySchema = z.object({
+    graphics: z.array(z.number().int().positive()).min(1).max(4),
+    blocked: z.boolean().optional(),
+});
+
+export type PaletteEntry = z.infer<typeof paletteEntrySchema>;
+
+/**
+ * Valida que los graficos de una entrada de paleta existan (originales o subidos).
+ */
+export async function validatePaletteEntry(
+    entry: PaletteEntry,
+): Promise<{ valid: boolean; reason?: string }> {
+    for (const grhIndex of entry.graphics) {
+        if (grhIndex >= UPLOADED_GRAPHIC_INDEX_START) {
+            const exists = await pool.query(
+                `SELECT 1 FROM game_uploaded_graphics WHERE grh_index = $1 LIMIT 1`,
+                [grhIndex],
+            );
+            if (exists.rowCount === 0) {
+                return {
+                    valid: false,
+                    reason: `El grafico ${grhIndex} no existe en el motor ni en assets subidos.`,
+                };
+            }
+        } else if (
+            grhIndex <= 0 ||
+            grhIndex > MAX_ENGINE_GRAPHIC_INDEX
+        ) {
+            return {
+                valid: false,
+                reason: `Indice de grafico invalido: ${grhIndex}.`,
+            };
+        }
+    }
+    return { valid: true };
+}
+
 export const tilePaintSchema = z.object({
     x: z.coerce.number().int().min(1).max(MAP_SIZE),
     y: z.coerce.number().int().min(1).max(MAP_SIZE),
@@ -249,21 +290,13 @@ export async function paintTiles(
         await client.query("BEGIN");
 
         for (const tile of tiles) {
-            // Un grafico referenciado tiene que existir: o es uno original del
-            // juego (por debajo del rango de subidos) o uno que subimos.
-            if (
-                tile.grhIndex != null &&
-                tile.grhIndex >= UPLOADED_GRAPHIC_INDEX_START
-            ) {
-                const exists = await client.query(
-                    `SELECT 1 FROM game_uploaded_graphics WHERE grh_index = $1 LIMIT 1`,
-                    [tile.grhIndex],
-                );
+            if (tile.grhIndex != null) {
+                const validation = await validatePaletteEntry({
+                    graphics: [tile.grhIndex],
+                });
 
-                if (exists.rowCount === 0) {
-                    throw new Error(
-                        `El grafico ${tile.grhIndex} no existe. Subilo antes de usarlo.`,
-                    );
+                if (!validation.valid) {
+                    throw new Error(validation.reason);
                 }
             }
 
