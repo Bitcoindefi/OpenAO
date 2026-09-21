@@ -122,6 +122,21 @@ import {
     tileEntitySchema,
     uploadGraphic,
 } from "./repositories/worldBuilder";
+import {
+    addModerator,
+    approveProposal,
+    getModerationDetail,
+    isModerator,
+    listModerators,
+    listModerationQueue,
+    listOwnProposals,
+    rejectProposal,
+    removeModerator,
+    reportProposal,
+    saveProposalDraft,
+    submitProposal,
+    unpublishProposal,
+} from "./repositories/mapModeration";
 import { MAX_PNG_BYTES } from "./lib/pngValidation";
 import {
     getGameCraftingRecipeById,
@@ -240,6 +255,34 @@ async function requireAdminEmailSession(
     }
 
     if (!isAuthorizedGameDataAdmin(authorized.session)) {
+        response.status(403).json({ error: "No autorizado." });
+        return null;
+    }
+
+    return authorized;
+}
+
+/**
+ * Deja pasar a un admin de game-data o a un moderador de mapas anotado.
+ *
+ * Los moderadores se suman y se quitan desde la API de admin, asi que la cola
+ * no queda atada a una sola cuenta.
+ */
+async function requireMapModeratorSession(
+    request: express.Request,
+    response: express.Response,
+): Promise<ReturnType<typeof getAuthorizedSession> | null> {
+    const authorized = await getAuthorizedSession(request);
+
+    if (!authorized) {
+        response.status(401).json({ error: "Unauthorized" });
+        return null;
+    }
+
+    if (
+        !isAuthorizedGameDataAdmin(authorized.session) &&
+        !(await isModerator(authorized.session.account._id))
+    ) {
         response.status(403).json({ error: "No autorizado." });
         return null;
     }
@@ -1110,6 +1153,261 @@ app.get("/admin/game-data/maps/:mapNum/status", async (request, response) => {
         response.status(400).json({ error: message });
     }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Etapa 5: propuestas y moderacion de mapas de usuario
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Crea o actualiza el borrador de una propuesta propia. */
+app.post("/maps/proposals", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        response
+            .status(201)
+            .json(
+                await saveProposalDraft(
+                    request.body,
+                    authorized.session.account._id,
+                ),
+            );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Lista las propuestas del autor, con el motivo de rechazo si lo hay. */
+app.get("/maps/proposals/mine", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        response.json({
+            proposals: await listOwnProposals(
+                authorized.session.account._id,
+            ),
+        });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/**
+ * Envia una propuesta. Aca corren los chequeos automaticos: si fallan no llega
+ * a la cola humana y vuelve rechazada con el detalle.
+ */
+app.post("/maps/proposals/:id/submit", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        response.json(
+            await submitProposal(
+                request.params.id,
+                authorized.session.account._id,
+            ),
+        );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Cualquier jugador reporta un mapa publicado y lo devuelve a la cola. */
+app.post("/maps/proposals/:id/report", async (request, response) => {
+    try {
+        const authorized = await getAuthorizedSession(request);
+        if (!authorized) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        const result = await reportProposal(
+            request.params.id,
+            authorized.session.account._id,
+            request.body,
+        );
+
+        response.status(201).json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Cola de moderacion con lo enviado y pendiente de revision humana. */
+app.get(
+    "/moderation/maps/queue",
+    async (request, response) => {
+        try {
+            const authorized = await requireMapModeratorSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            response.json({ proposals: await listModerationQueue() });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
+
+/**
+ * Vista previa de un mapa y sus assets para el moderador, sin entrar a jugar.
+ * Abrir una propuesta enviada la pasa a 'in_review'.
+ */
+app.get("/moderation/maps/:id", async (request, response) => {
+    try {
+        const authorized = await requireMapModeratorSession(request, response);
+        if (!authorized) return;
+
+        response.json(await getModerationDetail(request.params.id));
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response
+            .status(message === "La propuesta no existe." ? 404 : 400)
+            .json({ error: message });
+    }
+});
+
+/** Aprueba y publica un mapa propuesto. */
+app.post("/moderation/maps/:id/approve", async (request, response) => {
+    try {
+        const authorized = await requireMapModeratorSession(request, response);
+        if (!authorized) return;
+
+        response.json(
+            await approveProposal(
+                request.params.id,
+                authorized.session.account._id,
+            ),
+        );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Rechaza un mapa propuesto. El motivo es obligatorio. */
+app.post("/moderation/maps/:id/reject", async (request, response) => {
+    try {
+        const authorized = await requireMapModeratorSession(request, response);
+        if (!authorized) return;
+
+        response.json(
+            await rejectProposal(
+                request.params.id,
+                authorized.session.account._id,
+                request.body,
+            ),
+        );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Despublica un mapa que ya estaba vivo por un problema posterior. */
+app.post("/moderation/maps/:id/unpublish", async (request, response) => {
+    try {
+        const authorized = await requireMapModeratorSession(request, response);
+        if (!authorized) return;
+
+        response.json(
+            await unpublishProposal(
+                request.params.id,
+                authorized.session.account._id,
+                request.body,
+            ),
+        );
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Lista quienes pueden moderar mapas de usuario. */
+app.get("/admin/game-data/moderators", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        response.json({ moderators: await listModerators() });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Suma un moderador para que la cola no dependa de una sola persona. */
+app.post("/admin/game-data/moderators", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const accountId =
+            typeof request.body?.accountId === "string"
+                ? request.body.accountId.trim()
+                : "";
+
+        if (!accountId) {
+            response.status(400).json({ error: "accountId es requerido." });
+            return;
+        }
+
+        await addModerator(accountId, authorized.session.account._id);
+        response.status(201).json({ moderators: await listModerators() });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+/** Quita un moderador. */
+app.delete(
+    "/admin/game-data/moderators/:accountId",
+    async (request, response) => {
+        try {
+            const authorized = await requireAdminEmailSession(
+                request,
+                response,
+            );
+            if (!authorized) return;
+
+            const removed = await removeModerator(request.params.accountId);
+            response.json({ removed, moderators: await listModerators() });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unexpected error";
+            response.status(400).json({ error: message });
+        }
+    },
+);
 
 /**
  * Paleta de tiles disponibles para el mapa actual: las entradas de la paleta
