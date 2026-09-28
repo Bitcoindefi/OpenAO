@@ -104,6 +104,11 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/aoweb
 TOKEN_AUTH=changeme
 CORS_ORIGIN=http://localhost:3000
 SITE_URL=http://localhost:3000
+SES_REGION=us-east-1
+SES_ACCESS_KEY_ID=...
+SES_SECRET_ACCESS_KEY=...
+SES_FROM_EMAIL=noreply@tu-dominio.com
+SES_FROM_NAME=AOWeb
 ```
 
 Instalar dependencias y levantar en desarrollo:
@@ -118,6 +123,11 @@ La API queda en `http://localhost:3001`.
 
 > `SITE_URL` es la base que se usa para armar los enlaces de los correos, por ejemplo el de recuperación de contraseña. Si no se define, toma un valor por defecto que apunta a otro dominio y los enlaces llegan rotos. En producción tiene que ser `https://openao.cosmosapp.lat`.
 
+#### Correo (Amazon SES)
+
+La recuperación de contraseña envía mail con **Amazon SES v2**. Las cuatro variables `SES_REGION`, `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY` y `SES_FROM_EMAIL` son **obligatorias al arrancar** la API (si falta alguna, el proceso sale con un error claro en vez de fallar recién cuando un usuario pide el reset). `SES_FROM_NAME` es opcional y por defecto es `AOWeb`.
+
+Si SES está en sandbox, solo se puede enviar a identidades verificadas; el log del servidor etiqueta ese caso aparte de “sin configurar” para no confundir el diagnóstico. El frontend siempre recibe un mensaje genérico y nunca el detalle de AWS.
 ### 3. Levantar El Server Del Juego
 
 En otra terminal, crear `server/.env` tomando como base `server/.env.example`:

@@ -10,6 +10,11 @@ import { isValidGameNpcIndex } from "./repositories/gameNpcs";
 import express from "express";
 import config from "./config";
 import pool from "./db";
+import {
+    PASSWORD_RESET_EMAIL_CLIENT_ERROR,
+    assertSesConfigured,
+    formatSesSendError,
+} from "./lib/sesConfig";
 import { requireAuth } from "./middleware/auth";
 import {
     confirmPasswordReset,
@@ -261,6 +266,16 @@ async function ensurePgStatStatements(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+    try {
+        assertSesConfigured(config);
+        console.log("Amazon SES configuration present");
+    } catch (error) {
+        console.error(
+            `[API] ${error instanceof Error ? error.message : String(error)}`,
+        );
+        process.exit(1);
+    }
+
     try {
         await pool.query("SELECT 1");
         console.log("PostgreSQL connected successfully");
@@ -1687,8 +1702,16 @@ app.post("/auth/password-reset/request", async (request, response) => {
         );
         response.json(result);
     } catch (error) {
+        if (
+            !(error instanceof Error) ||
+            error.message !== PASSWORD_RESET_EMAIL_CLIENT_ERROR
+        ) {
+            console.error(
+                `[API] password-reset/request failed: ${formatSesSendError(error)}`,
+            );
+        }
         response.status(500).json({
-            error: error instanceof Error ? error.message : "Unexpected error",
+            error: PASSWORD_RESET_EMAIL_CLIENT_ERROR,
         });
     }
 });

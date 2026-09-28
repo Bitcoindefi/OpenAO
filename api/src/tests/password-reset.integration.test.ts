@@ -14,6 +14,7 @@ import {
     requestJson,
     requestPasswordReset,
 } from "./helpers/api";
+import { PASSWORD_RESET_EMAIL_CLIENT_ERROR } from "../lib/sesConfig";
 
 beforeAll(async () => {
     await ensureApiReady();
@@ -140,5 +141,16 @@ test("password reset tokens are single use", async () => {
     assert.equal(
         second.data.error,
         "El link de recuperacion es invalido o ya vencio",
+    );
+});
+
+test("password reset client error text stays generic (no SES/AWS leak)", () => {
+    assert.equal(
+        PASSWORD_RESET_EMAIL_CLIENT_ERROR,
+        "No se pudo enviar el email de recuperacion. Intenta de nuevo.",
+    );
+    assert.doesNotMatch(
+        PASSWORD_RESET_EMAIL_CLIENT_ERROR,
+        /SES_|AWS|sandbox|AccessKey|secret/i,
     );
 });

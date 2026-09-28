@@ -17,6 +17,10 @@ import {
     type RaceKey,
 } from "../lib/characterCreation";
 import { sendPasswordResetEmail } from "../lib/email";
+import {
+    PASSWORD_RESET_EMAIL_CLIENT_ERROR,
+    formatSesSendError,
+} from "../lib/sesConfig";
 import { hashPassword, verifyPassword } from "../lib/passwords";
 import {
     DISPLAY_NAME_MAX_LENGTH,
@@ -864,7 +868,10 @@ export async function requestPasswordReset(
                 [hashOpaqueToken(resetToken)],
             );
 
-            throw error;
+            console.error(
+                `[auth] password reset email failed: ${formatSesSendError(error)}`,
+            );
+            throw new Error(PASSWORD_RESET_EMAIL_CLIENT_ERROR);
         }
     }
 

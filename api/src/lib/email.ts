@@ -1,5 +1,6 @@
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import config from "../config";
+import { assertSesConfigured, formatSesSendError } from "./sesConfig";
 
 type PasswordResetEmailInput = {
   to: string;
@@ -10,16 +11,14 @@ type PasswordResetEmailInput = {
 let sesClient: SESv2Client | null = null;
 
 function getSesClient(): SESv2Client {
-  if (!config.sesRegion || !config.sesAccessKeyId || !config.sesSecretAccessKey || !config.sesFromEmail) {
-    throw new Error("Amazon SES no esta configurado");
-  }
+  assertSesConfigured(config);
 
   if (!sesClient) {
     sesClient = new SESv2Client({
-      region: config.sesRegion,
+      region: config.sesRegion!,
       credentials: {
-        accessKeyId: config.sesAccessKeyId,
-        secretAccessKey: config.sesSecretAccessKey,
+        accessKeyId: config.sesAccessKeyId!,
+        secretAccessKey: config.sesSecretAccessKey!,
       },
     });
   }
@@ -103,28 +102,33 @@ function buildPasswordResetText({ displayName, resetUrl }: PasswordResetEmailInp
 export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<void> {
   const client = getSesClient();
 
-  await client.send(new SendEmailCommand({
-    FromEmailAddress: `${config.sesFromName} <${config.sesFromEmail}>`,
-    Destination: {
-      ToAddresses: [input.to],
-    },
-    Content: {
-      Simple: {
-        Subject: {
-          Data: "AOWeb | Recuperacion de contraseña",
-          Charset: "UTF-8",
-        },
-        Body: {
-          Html: {
-            Data: buildPasswordResetHtml(input),
+  try {
+    await client.send(new SendEmailCommand({
+      FromEmailAddress: `${config.sesFromName} <${config.sesFromEmail}>`,
+      Destination: {
+        ToAddresses: [input.to],
+      },
+      Content: {
+        Simple: {
+          Subject: {
+            Data: "AOWeb | Recuperacion de contraseña",
             Charset: "UTF-8",
           },
-          Text: {
-            Data: buildPasswordResetText(input),
-            Charset: "UTF-8",
+          Body: {
+            Html: {
+              Data: buildPasswordResetHtml(input),
+              Charset: "UTF-8",
+            },
+            Text: {
+              Data: buildPasswordResetText(input),
+              Charset: "UTF-8",
+            },
           },
         },
       },
-    },
-  }));
+    }));
+  } catch (error) {
+    console.error(`[email] SES send failed: ${formatSesSendError(error)}`);
+    throw error;
+  }
 }
