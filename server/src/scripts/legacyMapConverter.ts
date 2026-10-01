@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-
 export type LegacyTile = {
     blocked: boolean;
     layer1: number;
