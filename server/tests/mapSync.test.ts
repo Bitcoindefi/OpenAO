@@ -1,8 +1,8 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { applyMapTileOverridesToVars, type MapTileOverride } from "../gameDataSync";
+import { applyMapTileOverridesToVars, type MapTileOverride } from "../src/gameDataSync";
 
-const vars = require("../vars");
+const vars = require("../src/vars");
 
 describe("Live Map Sync & Hot-Reloading", () => {
     beforeEach(() => {

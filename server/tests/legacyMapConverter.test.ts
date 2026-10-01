@@ -9,7 +9,7 @@ import {
     type SourceMeta,
     type SourceTerrain,
     type SourceSpecials,
-} from "../scripts/legacyMapConverter";
+} from "../src/scripts/legacyMapConverter";
 
 describe("Legacy VB6 Argentum Online Map Converter (OpenAO #23)", () => {
     it("should encode and decode binary VB6 .map accurately", () => {
