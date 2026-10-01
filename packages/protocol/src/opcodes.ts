@@ -112,7 +112,9 @@ export const SERVER_PACKET_ID = {
     retosAction: 248,
 } as const;
 
-export type ClientPacketID = typeof CLIENT_PACKET_ID;
-export type ServerPacketID = typeof SERVER_PACKET_ID;
-export type ClientPacketName = keyof ClientPacketID;
-export type ServerPacketName = keyof ServerPacketID;
+export type ClientPacketIdMap = typeof CLIENT_PACKET_ID;
+export type ServerPacketIdMap = typeof SERVER_PACKET_ID;
+export type ClientPacketName = keyof ClientPacketIdMap;
+export type ServerPacketName = keyof ServerPacketIdMap;
+export type ClientPacketId = ClientPacketIdMap[ClientPacketName];
+export type ServerPacketId = ServerPacketIdMap[ServerPacketName];

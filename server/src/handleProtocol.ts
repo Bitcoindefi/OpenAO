@@ -1,3 +1,9 @@
+import {
+    PROTOCOL_LIMITS,
+    type CraftingState,
+    type MarketState,
+    type RetosState,
+} from "@openao/protocol";
 import type { PackageApi } from "./package";
 import type { SocketApi } from "./socket";
 import { getRequiredFactionForItem } from "./factions";
@@ -21,90 +27,6 @@ import { getCharacterById, getClientById } from "./runtimeRegistry";
 export {};
 
 type ConsoleChannel = "console" | "global" | "party" | "clan" | "whisper";
-
-type CraftingOpenPayload = {
-    profession: "carpentry" | "blacksmith" | "tailoring";
-    title: string;
-    recipes: Array<{
-        itemId: number;
-        name: string;
-        grhIndex: number;
-        details: string;
-        stats: string;
-        skill: number;
-        category: string;
-        materials: Array<{
-            itemId: number;
-            name: string;
-            amount: number;
-            owned: number;
-        }>;
-    }>;
-};
-
-type MarketOpenPayload = {
-    npcName: string;
-    publicationFeeBps: number;
-    defaultDurationHours: number;
-    maxDurationHours: number;
-    listingGroups: Array<{
-        itemId: number;
-        itemName: string;
-        itemGrhIndex: number;
-        totalListings: number;
-        totalQuantity: number;
-        minUnitPrice: number;
-        listings: Array<{
-            id: string;
-            sellerName: string;
-            itemName: string;
-            itemGrhIndex: number;
-            quantity: number;
-            price: number;
-            status: "active" | "sold" | "expired" | "cancelled";
-            expiresAt: string;
-            createdAt: string;
-        }>;
-    }>;
-    myListings: Array<{
-        id: string;
-        sellerName: string;
-        itemName: string;
-        itemGrhIndex: number;
-        quantity: number;
-        price: number;
-        status: "active" | "sold" | "expired" | "cancelled";
-        expiresAt: string;
-        createdAt: string;
-    }>;
-    claims: Array<{
-        id: string;
-        claimType: "gold" | "item";
-        goldAmount: number;
-        itemId: number | null;
-        itemName: string | null;
-        itemGrhIndex: number | null;
-        itemQuantity: number | null;
-        sourceListingId: string | null;
-        createdAt: string;
-    }>;
-};
-
-type RetosOpenPayload = {
-    challenges: Array<{
-        id: string;
-        createdAt: number;
-        teamSize: 1 | 2;
-        proposer: {
-            id: string;
-            persistedId: string;
-            name: string;
-            level: number;
-            className: string;
-            raceName: string;
-        };
-    }>;
-};
 
 type AreaItemSnapshot = {
     idItem: number;
@@ -146,7 +68,7 @@ const socket = require("./socket") as SocketApi;
 const funct = require("./functions");
 const balance = require("./balance");
 
-const PANEL_SNAPSHOT_CHUNK_CHAR_LIMIT = 60000;
+const PANEL_SNAPSHOT_CHUNK_CHAR_LIMIT = PROTOCOL_LIMITS.maxSnapshotChunkCharacters;
 
 function splitSnapshotIntoChunks(serializedSnapshot: string) {
     const characters = Array.from(serializedSnapshot);
@@ -385,9 +307,9 @@ export type HandleProtocolApi = {
     agregarUserInvItem: (idUser: EntityId, idPos: number | string, client: RuntimeClient) => void;
     blockMap: (idMap: number, pos: Position, block: number | boolean, client: RuntimeClient) => void;
     openTrade: (idUser: EntityId, idNpc: EntityId, client: RuntimeClient) => void;
-    openCrafting: (payload: CraftingOpenPayload, client: RuntimeClient) => void;
-    openMarket: (payload: MarketOpenPayload, client: RuntimeClient) => void;
-    openRetos: (payload: RetosOpenPayload, client: RuntimeClient) => void;
+    openCrafting: (payload: CraftingState, client: RuntimeClient) => void;
+    openMarket: (payload: MarketState, client: RuntimeClient) => void;
+    openRetos: (payload: RetosState, client: RuntimeClient) => void;
     aprenderSpell: (idUser: EntityId, idPosSpell: number | string) => void;
     closeForce: (idUser: EntityId) => void;
     nameMap: (idUser: EntityId) => void;

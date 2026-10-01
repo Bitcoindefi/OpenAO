@@ -487,7 +487,7 @@ export function useGameSession({
             });
         };
 
-        socket.onclose = () => {
+        socket.onclose = (event) => {
             clearPing();
             if (
                 activeSessionKeyRef.current === connection.sessionKey &&
@@ -495,10 +495,11 @@ export function useGameSession({
             ) {
                 setIsSceneReadyRef.current(false);
                 const previousError = latestStatusRef.current.error;
+                const closeReason = event.reason.trim();
                 emitStatusRef.current({
                     connected: false,
                     connecting: false,
-                    error: previousError || "Conexion cerrada.",
+                    error: closeReason || previousError || "Conexion cerrada.",
                 });
             }
         };

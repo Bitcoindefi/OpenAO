@@ -477,7 +477,7 @@ export async function listCharacterRanking(options?: {
         c.level,
         c.exp,
         c.exp_next_level,
-        (c.ciudadanos_matados + c.criminales_matados) AS count_killed,
+        (COALESCE(c.ciudadanos_matados, 0) + COALESCE(c.criminales_matados, 0)) AS count_killed,
         c.id_clase,
         c.id_raza,
         COALESCE(c.criminal, FALSE) AS criminal,

@@ -1,3 +1,4 @@
+import type { RetoEntry } from "@openao/protocol";
 import type { GameApi } from "./game";
 import type { HandleProtocolApi } from "./handleProtocol";
 import type { SocketApi } from "./socket";
@@ -88,13 +89,7 @@ type ActiveMatch = {
     finished: boolean;
 };
 
-type ChallengeListItem = {
-    id: string;
-    createdAt: number;
-    teamSize: TeamSize;
-    proposer: ReturnType<typeof buildParticipantSummary>;
-    participants: Array<ReturnType<typeof buildParticipantSummary>>;
-};
+type ChallengeListItem = RetoEntry;
 
 function getGame() {
     return require("./game") as GameApi;

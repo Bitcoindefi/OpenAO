@@ -4,9 +4,8 @@
     "description": "",
     "main": "dist/server.js",
     "dependencies": {
-        "@openao/protocol": "workspace:*",
+        "@openao/protocol": "link:../packages/protocol",
         "axios": "^1.16.1",
-        "bytebuffer": "^5.0.1",
         "https": "^1.0.0",
         "lodash": "^4.18.1",
         "ws": "^8.20.1"
@@ -20,23 +19,26 @@
         "prettier": "^3.8.3",
         "tsx": "^4.22.1",
         "typescript": "^6.0.3",
-        "typescript-eslint": "^8.59.3",
-        "vitest": "^4.1.6"
+        "typescript-eslint": "^8.59.3"
     },
     "scripts": {
-        "clean": "rm -rf dist",
+        "protocol:build": "pnpm exec tsc -p ../packages/protocol/tsconfig.json",
+        "prebuild": "pnpm run protocol:build",
+        "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
         "build": "pnpm run clean && tsc && node scripts/copy-assets.cjs",
+        "predev": "pnpm run protocol:build",
         "dev": "NODE_ENV=development tsx watch src/server.ts",
+        "test": "tsx --test tests/**/*.test.ts",
         "compact-objs": "tsx src/scripts/compactObjsJson.ts",
         "compact-npcs": "tsx src/scripts/compactNpcsJson.ts",
         "export-editable-maps": "tsx src/scripts/exportEditableMaps.ts",
         "export-frontend-graphics": "tsx src/scripts/exportFrontendOptimizedGraphics.ts",
         "export-frontend-maps": "tsx src/scripts/exportFrontendOptimizedMaps.ts",
         "export-client-objs": "tsx src/scripts/exportClientObjs.ts",
+        "test:client-activity": "tsx src/scripts/testClientActivityPolicy.ts",
+        "test:connection-policy": "tsx src/scripts/testConnectionPolicy.ts",
         "start": "node dist/server.js",
-        "lint": "eslint src/**/*.ts",
-        "test": "tsx --test src/tests/mapSync.test.ts src/tests/legacyMapConverter.test.ts",
-        "convert-legacy-map": "tsx src/scripts/legacyMapConverter.ts",
+        "lint": "eslint \"./src/**/*.ts\"",
         "world-map": "node scripts/build-world-map.cjs",
         "compare-original-data": "tsx src/scripts/compareOriginalData.ts"
     },

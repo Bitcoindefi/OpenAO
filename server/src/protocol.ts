@@ -1,4 +1,5 @@
 export {};
+import { PROTOCOL_LIMITS } from "@openao/protocol";
 import { getFactionColor, getFactionRankTitle, getMaxEligibleFactionRank, type CharacterFaction } from "./factions";
 import type {
     DataObject,
@@ -899,9 +900,9 @@ const AREA_DIAMETER_X = vars.areaVisionDiameterX;
 const AREA_DIAMETER_Y = vars.areaVisionDiameterY;
 const AREA_OUTSIDE_OFFSET_X = vars.areaVisionOutsideOffsetX;
 const AREA_OUTSIDE_OFFSET_Y = vars.areaVisionOutsideOffsetY;
-const CLIENT_VIEW_RANGE_X = 10;
-const CLIENT_VIEW_RANGE_Y = 10;
-const CLIENT_VIEW_EXTRA_BOTTOM_Y = 1;
+const CLIENT_VIEW_RANGE_X = PROTOCOL_LIMITS.clientViewRangeX;
+const CLIENT_VIEW_RANGE_Y = PROTOCOL_LIMITS.clientViewRangeY;
+const CLIENT_VIEW_EXTRA_BOTTOM_Y = PROTOCOL_LIMITS.clientViewExtraBottomY;
 
 function isOutsideClientVision(origin: { x: number; y: number }, target: { x: number; y: number }) {
     const deltaX = Math.abs(origin.x - target.x);

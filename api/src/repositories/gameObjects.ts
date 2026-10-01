@@ -25,7 +25,22 @@ const listFiltersSchema = z.object({
   objType: z.coerce.number().int().optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   page: z.coerce.number().int().min(1).optional(),
+  /**
+   * Devuelve el catalogo completo en una sola pagina. El editor visual lo
+   * necesita para buscar y filtrar del lado del cliente sobre 1.062 objetos.
+   */
+  all: z.preprocess((value) => {
+    const raw = Array.isArray(value) ? value[0] : value;
+    return raw === true || raw === "true" || raw === "1";
+  }, z.boolean()),
 });
+
+/**
+ * Tamano de pagina cuando se pide el catalogo entero. Es un techo, no un
+ * objetivo: el catalogo real ronda los mil objetos y esto solo evita que un
+ * `all=true` se convierta en una consulta sin limite.
+ */
+const FULL_CATALOG_PAGE_SIZE = 10_000;
 
 let seedPromise: Promise<void> | null = null;
 
@@ -97,6 +112,7 @@ function toGameObjectSummary(row: GameObjectRow) {
     id: row.id,
     name: row.name,
     objType: row.obj_type,
+    grhIndex: Number(row.data.grhIndex ?? 0),
     version: Number(row.version),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -107,8 +123,8 @@ export async function listGameObjects(filters: unknown) {
   const parsed = listFiltersSchema.parse(filters ?? {});
   const values: Array<string | number> = [];
   const conditions: string[] = [];
-  const pageSize = parsed.limit ?? 100;
-  const page = parsed.page ?? 1;
+  const pageSize = parsed.all ? FULL_CATALOG_PAGE_SIZE : (parsed.limit ?? 100);
+  const page = parsed.all ? 1 : (parsed.page ?? 1);
   const offset = (page - 1) * pageSize;
 
   if (parsed.search) {

@@ -11,9 +11,11 @@ import {
     LogIn,
     LogOut,
     MessageCircle,
+    Hammer,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AuthErrorResponse, AuthSession } from "@/lib/auth";
+import { useGameDataAdmin } from "@/lib/editor/useGameDataAdmin";
 
 type AppChromeProps = {
     children: React.ReactNode;
@@ -49,6 +51,10 @@ export default function AppChrome({ children }: AppChromeProps) {
     const pathname = usePathname();
     const router = useRouter();
     const [session, setSession] = useState<AuthSession | null>(null);
+    // El editor de mapas es solo para administradores, asi que el enlace no se
+    // muestra a cualquier cuenta con sesion: entrar solo para encontrarse con
+    // una pantalla sin permiso no le sirve a nadie.
+    const isGameDataAdmin = useGameDataAdmin(session !== null) === "allowed";
 
     useEffect(() => {
         let cancelled = false;
@@ -129,6 +135,19 @@ export default function AppChrome({ children }: AppChromeProps) {
                                 </Link>
                             );
                         })}
+                        {isGameDataAdmin ? (
+                            <Link
+                                href="/construccion"
+                                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm transition ${
+                                    isActivePath(pathname, "/construccion")
+                                        ? "bg-amber-300/12 text-amber-300"
+                                        : "text-stone-400 hover:bg-white/5 hover:text-stone-100"
+                                }`}
+                            >
+                                <Hammer className="h-4 w-4" />
+                                Construccion
+                            </Link>
+                        ) : null}
                     </nav>
 
                     <div className="flex items-center gap-3">

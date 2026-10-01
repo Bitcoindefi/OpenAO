@@ -1,55 +1,22 @@
-export {};
-
-type ByteBufferLike = {
-    offset: number;
-    limit: number;
-    writeInt8: (value: number) => void;
-    writeUint8: (value: number) => void;
-    writeInt16: (value: number) => void;
-    writeUint16: (value: number) => void;
-    writeInt32: (value: number) => void;
-    writeUint32: (value: number) => void;
-    writeFloat: (value: number) => void;
-    writeDouble: (value: number) => void;
-    writeString: (value: string) => void;
-    readInt8: () => number;
-    readUint8: () => number;
-    readInt16: () => number;
-    readUint16: () => number;
-    readInt32: () => number;
-    readUint32: () => number;
-    readFloat: () => number;
-    readDouble: () => number;
-    readString: (length: number, metrics: number) => string;
-    flip: () => void;
-    toBuffer: () => Buffer;
-};
-
-type ByteBufferConstructor = {
-    new (capacity: number, littleEndian: boolean): ByteBufferLike;
-    DEFAULT_CAPACITY: number;
-    METRICS_CHARS: number;
-    calculateUTF8Chars: (value: string) => number;
-    wrap: (value: Buffer, encoding: "utf8", littleEndian: boolean) => ByteBufferLike;
-};
-
-const ByteBuffer = require("bytebuffer") as ByteBufferConstructor;
-import { CLIENT_PACKET_ID, SERVER_PACKET_ID } from "@openao/protocol";
-
-const clientPacketID = CLIENT_PACKET_ID;
-const serverPacketID = SERVER_PACKET_ID;
+import {
+    CLIENT_PACKET_ID,
+    SERVER_PACKET_ID,
+    PacketReader,
+    PacketWriter,
+    decodeClientPacket,
+    type DecodedClientPacket,
+} from "@openao/protocol";
 
 type PacketChunk = Buffer | ArrayBuffer | ArrayBufferView | string;
 
-export type ClientPacketID = typeof clientPacketID;
-export type ServerPacketID = typeof serverPacketID;
+export type ClientPacketID = typeof CLIENT_PACKET_ID;
+export type ServerPacketID = typeof SERVER_PACKET_ID;
 export type PacketPayload = PacketChunk | ReadonlyArray<PacketChunk>;
 
 export type PackageApi = {
     clientPacketID: ClientPacketID;
     serverPacketID: ServerPacketID;
-    bufferRcv: ByteBufferLike;
-    bufferSnd: ByteBufferLike;
+    decodeClientPacket: (data: PacketPayload) => DecodedClientPacket;
     setData: (data: PacketPayload) => void;
     getPackageID: () => number;
     setPackageID: (packageID: number) => void;
@@ -70,23 +37,7 @@ export type PackageApi = {
     encodeBatchFrame: (buffers: readonly Buffer[]) => Buffer;
 };
 
-function createByteBuffer() {
-    return new ByteBuffer(ByteBuffer.DEFAULT_CAPACITY, true);
-}
-
-function normalizeNumericInput(value: number | string | boolean | null | undefined) {
-    if (value === true) {
-        return 1;
-    }
-
-    if (value === false || value == null || value === "") {
-        return 0;
-    }
-
-    return Number.parseInt(String(value), 10) || 0;
-}
-
-function toBuffer(chunk: PacketChunk) {
+function toBuffer(chunk: PacketChunk): Buffer {
     if (Buffer.isBuffer(chunk)) {
         return chunk;
     }
@@ -102,123 +53,97 @@ function toBuffer(chunk: PacketChunk) {
     return Buffer.from(chunk, "utf8");
 }
 
+let reader = new PacketReader(new ArrayBuffer(0));
+let writer = new PacketWriter();
+
 const pkg: PackageApi = {
-    clientPacketID,
-    serverPacketID,
-    bufferRcv: createByteBuffer(),
-    bufferSnd: createByteBuffer(),
+    clientPacketID: CLIENT_PACKET_ID,
+    serverPacketID: SERVER_PACKET_ID,
+
+    decodeClientPacket(data) {
+        const buffer = Array.isArray(data)
+            ? Buffer.concat(data.map((chunk) => toBuffer(chunk)))
+            : toBuffer(data as PacketChunk);
+        return decodeClientPacket(buffer);
+    },
 
     setData(data) {
-        if (Array.isArray(data)) {
-            this.bufferRcv = ByteBuffer.wrap(Buffer.concat(data.map((chunk) => toBuffer(chunk))), "utf8", true);
-            return;
-        }
-
-        this.bufferRcv = ByteBuffer.wrap(toBuffer(data as PacketChunk), "utf8", true);
+        const buffer = Array.isArray(data)
+            ? Buffer.concat(data.map((chunk) => toBuffer(chunk)))
+            : toBuffer(data as PacketChunk);
+        reader = new PacketReader(buffer);
     },
 
     getPackageID() {
-        return this.getByte();
+        return reader.getByte();
     },
 
     setPackageID(packageID) {
-        this.bufferSnd = createByteBuffer();
-        this.writeByte(packageID);
+        writer = new PacketWriter(packageID);
     },
 
     writeByte(numByte, signed) {
-        const value = normalizeNumericInput(numByte);
-
-        if (signed) {
-            this.bufferSnd.writeInt8(value);
-            return;
-        }
-
-        this.bufferSnd.writeUint8(value);
+        writer.writeByte(numByte, signed);
     },
 
     writeShort(numShort, signed) {
-        const value = normalizeNumericInput(numShort);
-
-        if (signed) {
-            this.bufferSnd.writeInt16(value);
-            return;
-        }
-
-        this.bufferSnd.writeUint16(value);
+        writer.writeShort(numShort, signed);
     },
 
     writeInt(numInt, signed) {
-        const value = normalizeNumericInput(numInt);
-
-        if (signed) {
-            this.bufferSnd.writeInt32(value);
-            return;
-        }
-
-        this.bufferSnd.writeUint32(value);
+        writer.writeInt(numInt, signed);
     },
 
     writeFloat(numFloat) {
-        this.bufferSnd.writeFloat(normalizeNumericInput(numFloat));
+        writer.writeFloat(numFloat);
     },
 
     writeDouble(numDouble) {
-        this.bufferSnd.writeDouble(normalizeNumericInput(numDouble));
+        writer.writeDouble(numDouble);
     },
 
     writeString(dataString) {
-        const value = dataString ?? "";
-
-        this.writeShort(ByteBuffer.calculateUTF8Chars(value));
-        this.bufferSnd.writeString(value);
+        writer.writeString(dataString);
     },
 
     getByte(signed) {
-        return signed ? this.bufferRcv.readInt8() : this.bufferRcv.readUint8();
+        return reader.getByte(signed);
     },
 
     getShort(signed) {
-        return signed ? this.bufferRcv.readInt16() : this.bufferRcv.readUint16();
+        return reader.getShort(signed);
     },
 
     getInt(signed) {
-        return signed ? this.bufferRcv.readInt32() : this.bufferRcv.readUint32();
+        return reader.getInt(signed);
     },
 
     getFloat() {
-        return this.bufferRcv.readFloat();
+        return reader.getFloat();
     },
 
     getDouble() {
-        return this.bufferRcv.readDouble();
+        return reader.getDouble();
     },
 
     getString() {
-        if (!this.canReadBytes(2)) {
+        if (!reader.canReadBytes(2)) {
             return "";
         }
 
-        const lengthStr = this.getShort();
-
-        if (lengthStr < 0 || !this.canReadBytes(lengthStr)) {
+        try {
+            return reader.getString();
+        } catch {
             return "";
         }
-
-        return this.bufferRcv.readString(lengthStr, ByteBuffer.METRICS_CHARS);
     },
 
     canReadBytes(length) {
-        if (length < 0) {
-            return false;
-        }
-
-        return this.bufferRcv.offset + length <= this.bufferRcv.limit;
+        return reader.canReadBytes(length);
     },
 
     dataSend() {
-        this.bufferSnd.flip();
-        return this.bufferSnd.toBuffer();
+        return Buffer.from(writer.toUint8Array());
     },
 
     encodeBatchFrame(buffers) {

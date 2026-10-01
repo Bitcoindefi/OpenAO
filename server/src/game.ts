@@ -1,3 +1,9 @@
+import type {
+    MarketClaimEntry,
+    MarketListingEntry,
+    MarketListingGroupEntry,
+    MarketState,
+} from "@openao/protocol";
 import {
     getFactionColor,
     getFactionConfig,
@@ -2746,38 +2752,11 @@ type MarketCommandResult = {
     message: string;
 };
 
-type MarketUiListing = {
-    id: string;
-    itemId: number;
-    sellerName: string;
-    itemName: string;
-    itemGrhIndex: number;
-    quantity: number;
-    price: number;
-    status: "active" | "sold" | "expired" | "cancelled";
-    expiresAt: string;
-    createdAt: string;
-};
+type MarketUiListing = MarketListingEntry;
 
-type MarketUiListingGroup = {
-    itemId: number;
-    itemName: string;
-    itemGrhIndex: number;
-    totalListings: number;
-    totalQuantity: number;
-    minUnitPrice: number;
-    listings: MarketUiListing[];
-};
+type MarketUiListingGroup = MarketListingGroupEntry;
 
-type MarketUiClaim = {
-    id: string;
-    claimType: "gold" | "item";
-    goldAmount: number;
-    itemName: string | null;
-    itemGrhIndex: number | null;
-    itemQuantity: number | null;
-    createdAt: string;
-};
+type MarketUiClaim = MarketClaimEntry;
 
 type MarketBrowseOptions = {
     listingLimit?: number;
@@ -2786,16 +2765,7 @@ type MarketBrowseOptions = {
     sortPrice?: "recent" | "asc" | "desc";
 };
 
-type MarketUiState = {
-    npcName: string;
-    publicationFeeBps: number;
-    defaultDurationHours: number;
-    maxDurationHours: number;
-    hasMoreListings: boolean;
-    listingGroups: MarketUiListingGroup[];
-    myListings: MarketUiListing[];
-    claims: MarketUiClaim[];
-};
+type MarketUiState = MarketState;
 
 function normalizeFaction(value: unknown): CharacterFaction {
     return value === "armada" || value === "caos" ? value : "none";

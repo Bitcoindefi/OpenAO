@@ -172,7 +172,11 @@ Abrir `http://localhost:3000`.
 | API REST, autenticación y datos del juego | `api/` | 3001 |
 | Server del juego, WebSocket con protocolo binario | `server/` | 7666 |
 | Frontend, Next.js + PixiJS | `frontend/` | 3000 |
+| Contrato binario compartido | `packages/protocol/` | — |
 | PostgreSQL | `database/aoweb.sql` | 5432 |
+
+La guía para validar cambios del protocolo está en
+[`docs/protocol-testing.md`](docs/protocol-testing.md).
 
 ## Contribuir
 
