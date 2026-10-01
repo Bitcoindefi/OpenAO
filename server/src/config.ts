@@ -67,4 +67,4 @@ const config: RuntimeConfig = {
     distRoot,
 };
 
-export = config;
+module.exports = config;

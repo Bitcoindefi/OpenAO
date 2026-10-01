@@ -62,6 +62,30 @@ export type InitializeSmeltingRecipesResult = {
     loadedRecipes: number;
 };
 
+export type MapTileOverride = {
+    x: number;
+    y: number;
+    layer: number;
+    grhIndex: number | null;
+    blocked: boolean | null;
+    status: "draft" | "published";
+};
+
+export type MapPublishedOverrides = {
+    mapNum: number;
+    overrides: MapTileOverride[];
+};
+
+export type InitializeMapsResult = {
+    loadedMapsWithOverrides: number;
+    totalAppliedOverrides: number;
+};
+
+export type ReloadMapsResult = {
+    updatedMaps: number;
+    appliedOverrides: number;
+};
+
 type ObjectChangesResponse = {
     currentVersion: number;
     changes: Array<{ id: number; version: number; data: DataObject }>;
@@ -493,14 +517,194 @@ async function initializeBalanceFromApi(): Promise<InitializeBalanceResult> {
     };
 }
 
+type BaseTileSnapshot = {
+    blocked?: number;
+    graphicAtLayer?: number;
+};
+
+// Tracks baseline state of tiles before overrides were applied, enabling clean rollback when overrides are removed/deleted
+const baseTileSnapshots = new Map<number, Map<string, BaseTileSnapshot>>();
+const activeMapOverrides = new Map<number, MapTileOverride[]>();
+
+export function clearMapOverrideSnapshots(): void {
+    baseTileSnapshots.clear();
+    activeMapOverrides.clear();
+}
+
+function applyMapTileOverridesToVars(mapNum: number, overrides: MapTileOverride[]): number {
+    if (!vars.mapa[mapNum]) {
+        return 0;
+    }
+
+    if (!baseTileSnapshots.has(mapNum)) {
+        baseTileSnapshots.set(mapNum, new Map());
+    }
+    const mapSnapshots = baseTileSnapshots.get(mapNum)!;
+
+    // Revert any previously applied overrides that were deleted or unpublished in DB
+    const previousOverrides = activeMapOverrides.get(mapNum) || [];
+    const currentKeys = new Set(overrides.map((o) => `${o.x},${o.y},${o.layer}`));
+
+    for (const prev of previousOverrides) {
+        const key = `${prev.x},${prev.y},${prev.layer}`;
+        if (!currentKeys.has(key)) {
+            const snapshot = mapSnapshots.get(key);
+            const tile = vars.mapa[mapNum]?.[prev.y]?.[prev.x];
+            if (tile && snapshot) {
+                if (snapshot.blocked !== undefined) {
+                    tile.blocked = snapshot.blocked;
+                } else {
+                    delete tile.blocked;
+                }
+
+                if (snapshot.graphicAtLayer !== undefined) {
+                    if (!tile.graphics || typeof tile.graphics !== "object") {
+                        tile.graphics = {};
+                    }
+                    (tile.graphics as Record<number, number>)[prev.layer] = snapshot.graphicAtLayer;
+                } else if (tile.graphics && typeof tile.graphics === "object") {
+                    delete (tile.graphics as Record<number, number>)[prev.layer];
+                    if (Object.keys(tile.graphics).length === 0) {
+                        delete tile.graphics;
+                    }
+                }
+                mapSnapshots.delete(key);
+            }
+        }
+    }
+
+    let applied = 0;
+    for (const override of overrides) {
+        const { x, y, layer, grhIndex, blocked } = override;
+        if (!vars.mapa[mapNum][y]) {
+            vars.mapa[mapNum][y] = {};
+        }
+        if (!vars.mapa[mapNum][y][x]) {
+            vars.mapa[mapNum][y][x] = {};
+        }
+
+        const tile = vars.mapa[mapNum][y][x];
+        const key = `${x},${y},${layer}`;
+
+        // Snapshot original tile baseline on first modification
+        if (!mapSnapshots.has(key)) {
+            mapSnapshots.set(key, {
+                blocked: tile.blocked,
+                graphicAtLayer: tile.graphics && typeof tile.graphics === "object" ? tile.graphics[layer] : undefined,
+            });
+        }
+
+        if (blocked !== null && blocked !== undefined) {
+            if (blocked) {
+                tile.blocked = 1;
+            } else {
+                delete tile.blocked;
+            }
+        }
+
+        if (grhIndex !== undefined) {
+            if (!tile.graphics || typeof tile.graphics !== "object") {
+                tile.graphics = {};
+            }
+            if (grhIndex === null || grhIndex === 0) {
+                delete (tile.graphics as Record<number, number>)[layer];
+                if (Object.keys(tile.graphics).length === 0) {
+                    delete tile.graphics;
+                }
+            } else {
+                (tile.graphics as Record<number, number>)[layer] = grhIndex;
+            }
+        }
+        applied += 1;
+    }
+
+    activeMapOverrides.set(mapNum, [...overrides]);
+    return applied;
+}
+
+async function initializeMapsFromApi(): Promise<InitializeMapsResult> {
+    try {
+        const maps = (await funct.fetchUrl("/internal/game-data/maps", {
+            headers: {
+                Authorization: vars.tokenAuth,
+            },
+        })) as MapPublishedOverrides[];
+
+        let totalAppliedOverrides = 0;
+        let loadedMapsWithOverrides = 0;
+
+        if (Array.isArray(maps)) {
+            for (const mapData of maps) {
+                const applied = applyMapTileOverridesToVars(mapData.mapNum, mapData.overrides);
+                if (applied > 0) {
+                    loadedMapsWithOverrides += 1;
+                    totalAppliedOverrides += applied;
+                }
+            }
+        }
+
+        return {
+            loadedMapsWithOverrides,
+            totalAppliedOverrides,
+        };
+    } catch (error) {
+        console.error("[GAME DATA] Error al inicializar mapas desde API:", error);
+        return {
+            loadedMapsWithOverrides: 0,
+            totalAppliedOverrides: 0,
+        };
+    }
+}
+
+async function reloadMapDiff(mapNum: number): Promise<{ mapNum: number; appliedOverrides: number }> {
+    const result = (await funct.fetchUrl(`/internal/game-data/maps/${mapNum}/overrides`, {
+        headers: {
+            Authorization: vars.tokenAuth,
+        },
+    })) as { mapNum: number; overrides: MapTileOverride[] };
+
+    const appliedOverrides = applyMapTileOverridesToVars(mapNum, result.overrides ?? []);
+    return { mapNum, appliedOverrides };
+}
+
+async function reloadMapsDiff(): Promise<ReloadMapsResult> {
+    const maps = (await funct.fetchUrl("/internal/game-data/maps", {
+        headers: {
+            Authorization: vars.tokenAuth,
+        },
+    })) as MapPublishedOverrides[];
+
+    let updatedMaps = 0;
+    let appliedOverrides = 0;
+
+    if (Array.isArray(maps)) {
+        for (const mapData of maps) {
+            const applied = applyMapTileOverridesToVars(mapData.mapNum, mapData.overrides);
+            if (applied > 0) {
+                updatedMaps += 1;
+                appliedOverrides += applied;
+            }
+        }
+    }
+
+    return {
+        updatedMaps,
+        appliedOverrides,
+    };
+}
+
 export {
+    applyMapTileOverridesToVars,
     initializeBalanceFromApi,
     initializeCraftingRecipesFromApi,
+    initializeMapsFromApi,
     initializeNpcTemplatesFromApi,
     initializeObjectsFromApi,
     initializeSmeltingRecipesFromApi,
     reloadBalanceDiff,
     reloadCraftingRecipesDiff,
+    reloadMapDiff,
+    reloadMapsDiff,
     reloadObjectsDiff,
     reloadNpcsDiff,
 };

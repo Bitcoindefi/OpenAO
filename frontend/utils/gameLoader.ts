@@ -51,6 +51,23 @@ const jsonRequestCache = new Map<string, Promise<unknown>>();
 const jsonValueCache = new Map<string, unknown>();
 const mapRequestCache = new Map<number, Promise<MapData>>();
 const mapValueCache = new Map<number, MapData>();
+const MAX_CACHED_MAPS = 6;
+
+function setCachedMapData(mapNumber: number, data: MapData): void {
+    mapValueCache.delete(mapNumber);
+    mapValueCache.set(mapNumber, data);
+
+    if (mapValueCache.size > MAX_CACHED_MAPS) {
+        const oldestKey = mapValueCache.keys().next().value;
+        if (oldestKey !== undefined) {
+            mapValueCache.delete(oldestKey);
+        }
+    }
+}
+
+export function clearMapCache(): void {
+    mapValueCache.clear();
+}
 const DYNAMIC_INSTANCE_MAP_START = 30_000;
 const DYNAMIC_INSTANCE_MAP_STRIDE = 50;
 const CHALLENGE_INSTANCE_MAP_START = 2_000;
@@ -641,7 +658,7 @@ export async function loadMapData(mapNumber: number): Promise<MapData> {
                     dynamicBaseMapNumber,
                     mapNumber,
                 );
-                mapValueCache.set(mapNumber, remappedData);
+                setCachedMapData(mapNumber, remappedData);
                 return remappedData;
             }
 
@@ -665,7 +682,7 @@ export async function loadMapData(mapNumber: number): Promise<MapData> {
                     dynamicBaseMapNumber,
                     mapNumber,
                 );
-                mapValueCache.set(mapNumber, remappedData);
+                setCachedMapData(mapNumber, remappedData);
                 return remappedData;
             }
 
@@ -676,7 +693,7 @@ export async function loadMapData(mapNumber: number): Promise<MapData> {
                     `local map ${mapNumber}`,
                     { preferLocal: true },
                 );
-                mapValueCache.set(mapNumber, localMapData);
+                setCachedMapData(mapNumber, localMapData);
                 return localMapData;
             }
 
@@ -695,7 +712,7 @@ export async function loadMapData(mapNumber: number): Promise<MapData> {
                     CHALLENGE_INSTANCE_BASE_MAP_ID,
                     mapNumber,
                 );
-                mapValueCache.set(mapNumber, remappedData);
+                setCachedMapData(mapNumber, remappedData);
                 return remappedData;
             }
 
@@ -724,7 +741,7 @@ export async function loadMapData(mapNumber: number): Promise<MapData> {
                 mapNumber,
             );
             await applyMapOverrides(decompressedData, mapNumber);
-            mapValueCache.set(mapNumber, decompressedData);
+            setCachedMapData(mapNumber, decompressedData);
             return decompressedData;
         } catch (error) {
             console.error(`Error loading map ${mapNumber}:`, error);
