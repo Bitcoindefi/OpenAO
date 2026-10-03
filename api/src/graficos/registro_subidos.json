@@ -1,0 +1,17 @@
+{
+  "range": {
+    "min": 100000,
+    "max": 199999
+  },
+  "nextId": 100001,
+  "assets": {
+    "a1b2c3.png": {
+      "id": 100000,
+      "file": "uploads/a1b2c3.png",
+      "width": 32,
+      "height": 32,
+      "frames": 1,
+      "uploadedAt": "2025-01-01T00:00:00Z"
+    }
+  }
+}
