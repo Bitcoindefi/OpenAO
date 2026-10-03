@@ -9,7 +9,6 @@ test-results/
 playwright-report/
 .opencode/
 
-.env*
 !.env.example
 !.env.docker.example
 
@@ -21,3 +20,4 @@ playwright-report/
 *.cer
 *.jks
 *.keystore
+config.bat
