@@ -1,0 +1,15 @@
+{
+  "mapa": "mapa1",
+  "paleta": [
+    {
+      "id": 0,
+      "graphics": [5500, 581],
+      "bloqueado": false
+    },
+    {
+      "id": 1,
+      "graphics": [100000],
+      "bloqueado": true
+    }
+  ]
+}

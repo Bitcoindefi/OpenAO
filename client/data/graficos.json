@@ -1,0 +1,16 @@
+[
+  {
+    "id": 5500,
+    "file": "original/5500.png"
+  },
+  {
+    "id": 581,
+    "file": "original/581.png"
+  },
+  {
+    "id": 100000,
+    "file": "uploads/a1b2c3.png",
+    "uploaded": true,
+    "frames": 1
+  }
+]
