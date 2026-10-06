@@ -286,6 +286,35 @@ class LoadMaps {
             resolve(mapNum);
         });
     }
+
+    async reloadMapByNumber(mapNum: number): Promise<boolean> {
+        if (!this.mapFilesExist(mapNum)) {
+            throw new Error(`El mapa ${mapNum} no existe en disco`);
+        }
+
+        await this.readMap(mapNum);
+
+        const players = vars.personajes;
+        if (players) {
+            for (const userIndex of Object.keys(players)) {
+                const user = players[userIndex];
+                if (user && user.pos && (user.map === mapNum || user.pos.map === mapNum)) {
+                    const tile = vars.mapa[mapNum]?.[user.pos.y]?.[user.pos.x];
+                    if (tile?.blocked) {
+                        if (user.map !== undefined) user.map = 1;
+                        if (user.pos.map !== undefined) user.pos.map = 1;
+                        user.pos.x = 50;
+                        user.pos.y = 50;
+                        if (typeof user.sendPosicion === "function") {
+                            user.sendPosicion();
+                        }
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
 }
 
 module.exports = LoadMaps;
