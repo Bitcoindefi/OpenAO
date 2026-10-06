@@ -652,3 +652,20 @@ CREATE INDEX IF NOT EXISTS idx_game_map_tile_entities_map
     ON game_map_tile_entities(map_num, status);
 CREATE INDEX IF NOT EXISTS idx_game_uploaded_graphics_created_at
     ON game_uploaded_graphics(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_maps (
+    id INTEGER PRIMARY KEY CHECK (id BETWEEN 600 AND 1999),
+    account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    terrain VARCHAR(50) NOT NULL DEFAULT 'PRADERA',
+    zone VARCHAR(50) NOT NULL DEFAULT 'CAMPO',
+    status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'proposed', 'published', 'archived')),
+    npc_count INTEGER NOT NULL DEFAULT 0 CHECK (npc_count >= 0),
+    object_count INTEGER NOT NULL DEFAULT 0 CHECK (object_count >= 0),
+    asset_bytes BIGINT NOT NULL DEFAULT 0 CHECK (asset_bytes >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_maps_account_id ON user_maps(account_id);
+CREATE INDEX IF NOT EXISTS idx_user_maps_status ON user_maps(status);
