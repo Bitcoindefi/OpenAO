@@ -5,6 +5,15 @@ import {
     removeMapNpc,
     MAX_NPCS_PER_MAP
 } from "./lib/mapNpcStorage";
+import {
+    createExitPair,
+    deleteMapExit,
+    findMapsWithoutIncomingExits,
+    findOrphanExits,
+    findUnreachableMaps,
+    listMapExitsWithIncoming,
+    setMapExit
+} from "./lib/mapExitStorage";
 import { resolveMapsSourceDir } from "./repositories/worldBuilder";
 import { isValidGameNpcIndex } from "./repositories/gameNpcs";
 import express from "express";
@@ -3200,3 +3209,96 @@ app.delete("/admin/game-data/maps/:mapNum/npcs/:x/:y", async (request, response)
         response.status(400).json({ error: message });
     }
 });
+
+/**
+ * Endpoints del Modo Construcción: salidas entre mapas (#10)
+ */
+async function handleExitRoute(
+    request: express.Request,
+    response: express.Response,
+    action: (mapsSourceDir: string, mapNum: number) => Promise<unknown> | unknown,
+    successStatus = 200
+) {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const mapNum = Number.parseInt(String(request.params.mapNum ?? "0"), 10);
+        if (!Number.isInteger(mapNum) || mapNum <= 0) {
+            response.status(400).json({ error: "Número de mapa inválido." });
+            return;
+        }
+
+        const result = (await action(resolveMapsSourceDir(), mapNum)) as { ok?: boolean; reason?: string };
+        if (result && result.ok === false) {
+            response.status(400).json({ error: result.reason });
+            return;
+        }
+        response.status(successStatus).json(result);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+}
+
+app.get("/admin/game-data/exits/check", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const dir = resolveMapsSourceDir();
+        const root = Number.parseInt(String(request.query.root ?? "1"), 10);
+        response.json({
+            orphanExits: await findOrphanExits(dir),
+            unreachableMaps: await findUnreachableMaps(dir, [Number.isInteger(root) ? root : 1]),
+            mapsWithoutIncomingExits: await findMapsWithoutIncomingExits(dir)
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.post("/admin/game-data/exits/pair", async (request, response) => {
+    try {
+        const authorized = await requireAdminEmailSession(request, response);
+        if (!authorized) return;
+
+        const result = await createExitPair(resolveMapsSourceDir(), request.body?.forward, request.body?.back);
+        if (!result.ok) {
+            response.status(400).json({ error: result.reason });
+            return;
+        }
+        response.status(201).json(result);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        response.status(400).json({ error: message });
+    }
+});
+
+app.get("/admin/game-data/maps/:mapNum/exits", (request, response) =>
+    handleExitRoute(request, response, (dir, mapNum) => listMapExitsWithIncoming(dir, mapNum))
+);
+
+app.put("/admin/game-data/maps/:mapNum/exits/:x/:y", (request, response) =>
+    handleExitRoute(request, response, (dir, mapNum) =>
+        setMapExit(
+            dir,
+            mapNum,
+            Number.parseInt(String(request.params.x), 10),
+            Number.parseInt(String(request.params.y), 10),
+            request.body
+        )
+    )
+);
+
+app.delete("/admin/game-data/maps/:mapNum/exits/:x/:y", (request, response) =>
+    handleExitRoute(request, response, (dir, mapNum) =>
+        deleteMapExit(
+            dir,
+            mapNum,
+            Number.parseInt(String(request.params.x), 10),
+            Number.parseInt(String(request.params.y), 10)
+        )
+    )
+);
