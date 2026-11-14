@@ -1,0 +1,4 @@
+{
+  "info": "This directory is a placeholder. User maps are stored in the database and served via the /api/maps/user endpoint to ensure sandboxing and ownership validation.",
+  "range": "40000-49999"
+}
